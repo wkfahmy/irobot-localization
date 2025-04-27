@@ -7,6 +7,10 @@
 
 float lidar_distance = -1.f; // Minimum distance in front sector
 bool scan_received = false;  // Flag to check if we got a scan
+int min_distance_index;
+int start_index = -1;        // Now global
+int end_index = -1;
+bool isSpinning = false;
 
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
@@ -19,17 +23,19 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg)
     float sector_max_angle =  M_PI / 6; // +30 degrees
 
     // Computing the indices corresponding to -30° and +30°
-    int start_index = std::max(0, int((sector_min_angle - angle_min) / angle_increment));
-    int end_index = std::min(ranges_size - 1, int((sector_max_angle - angle_min) / angle_increment));
+    start_index = std::max(0, int((sector_min_angle - angle_min) / angle_increment));
+    end_index = std::min(ranges_size - 1, int((sector_max_angle - angle_min) / angle_increment));
 
     // Finding the minimum distance in that sector
     float min_distance = std::numeric_limits<float>::infinity();
+
     for (int i = start_index; i <= end_index; ++i) {
         float d = msg->ranges[i];
         if (!std::isnan(d) && d > msg->range_min && d < msg->range_max) // here it can also handles the NaN readings
-        { 
+        {
             if (d < min_distance) {
                 min_distance = d;
+                min_distance_index = i;
             }
         }
     }
@@ -74,22 +80,29 @@ int main(int argc, char **argv)
             rate.sleep();
             continue;
         }
-
-        if (lidar_distance > 0.5f || lidar_distance < 0.f) {
-            // No obstacle close → drive forward
-            srv.request.left = 1.0;
-            srv.request.right = 1.0;
-        } else {
-            // Obstacle detected → turn
-            // Randomly choose to turn left or right
-            if (std::rand() % 2 == 0) {
-                srv.request.left = 1.0;
-                srv.request.right = -1.0;
-            } else {
-                srv.request.left = -1.0;
-                srv.request.right = 1.0;
-            }
+        if (isSpinning && lidar_distance > 0.3f) {
+            isSpinning = false;
         }
+
+        if ((lidar_distance > 0.3f || lidar_distance < 0.f) && !isSpinning) {
+            // No obstacle close → drive forward
+            srv.request.left = 5.0;
+            srv.request.right = 5.0;
+        } else {
+            int index_diff_left = min_distance_index - start_index;
+            int index_diff_right = end_index - min_distance_index;
+
+            if (index_diff_left <= index_diff_right) {
+                srv.request.left = -3.0;
+                srv.request.right = 3.0;
+            } else {
+                srv.request.left = 3.0;
+                srv.request.right = -3.0;
+            }
+            isSpinning = true;
+        }
+
+
 
         if (!diffDrive.call(srv)) {
             ROS_ERROR("Failed to call diff_drive service!");
