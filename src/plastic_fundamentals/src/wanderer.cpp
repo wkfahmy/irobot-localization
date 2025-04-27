@@ -19,12 +19,12 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg)
     float angle_increment = msg->angle_increment; // Angular separation between two consecutive beams, in radians (very small, around 0.36° ≈ 0.0063 rad).
 
     // The sector that we care about: -30° to +30° (in radians)
-    float sector_min_angle = -M_PI / 6; // -30 degrees
-    float sector_max_angle =  M_PI / 6; // +30 degrees
+    float sector_min_angle = msg->angle_min; // -120 degrees
+    float sector_max_angle =  msg->angle_max; // +120 degrees
 
     // Computing the indices corresponding to -30° and +30°
-    start_index = std::max(0, int((sector_min_angle - angle_min) / angle_increment));
-    end_index = std::min(ranges_size - 1, int((sector_max_angle - angle_min) / angle_increment));
+    start_index = 0;
+    end_index = ranges_size - 1;
 
     // Finding the minimum distance in that sector
     float min_distance = std::numeric_limits<float>::infinity();
