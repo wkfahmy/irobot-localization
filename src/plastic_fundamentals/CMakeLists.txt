@@ -79,3 +79,6 @@ add_executable(square_no_sensors src/square_no_sensors.cpp)
 target_link_libraries(square_no_sensors ${catkin_LIBRARIES})
 add_dependencies(square_no_sensors create_fundamentals_generate_messages_cpp)
 
+add_executable(center src/center.cpp)
+target_link_libraries(center ${catkin_LIBRARIES})
+add_dependencies(center create_fundamentals_generate_messages_cpp)
