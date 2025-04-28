@@ -8,9 +8,12 @@
 float lidar_distance = -1.f; // Minimum distance in front sector
 bool scan_received = false;  // Flag to check if we got a scan
 int min_distance_index;
-int start_index = -1;        // Now global
+int start_index = -1;
 int end_index = -1;
 bool isSpinning = false;
+int spin_counter = 0; // how long to keep spinning
+const int spin_duration = 10; // spin for 15 cycle for example (~1.5 second if rate=10Hz)
+
 
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
@@ -80,14 +83,22 @@ int main(int argc, char **argv)
             rate.sleep();
             continue;
         }
-        if (isSpinning && lidar_distance > 0.3f) {
-            isSpinning = false;
-        }
 
-        if ((lidar_distance > 0.3f || lidar_distance < 0.f) && !isSpinning) {
+        if (spin_counter > 0) {
+        // Still spinning
+        spin_counter--;
+        if (!diffDrive.call(srv)) {
+            ROS_ERROR("Failed to call diff_drive service!");
+        }
+        rate.sleep();
+        continue;
+    }
+
+        if (lidar_distance > 0.2f || lidar_distance < 0.f) {
             // No obstacle close → drive forward
-            srv.request.left = 5.0;
-            srv.request.right = 5.0;
+            srv.request.left = 10.0;
+            srv.request.right = 10.0;
+	    isSpinning = false;
         } else {
             int index_diff_left = min_distance_index - start_index;
             int index_diff_right = end_index - min_distance_index;
@@ -100,6 +111,7 @@ int main(int argc, char **argv)
                 srv.request.right = -3.0;
             }
             isSpinning = true;
+	    spin_counter = spin_duration;
         }
 
 
