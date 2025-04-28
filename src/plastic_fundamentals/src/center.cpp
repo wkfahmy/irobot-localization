@@ -18,6 +18,8 @@ const float fov_deg = 240.0f;
 const float R     = 0.34f;  // 34 cm robot radius
 const float dL    = 0.12f;  // 12 cm lidar offset
 
+float step = -1;
+float start_angle = 0;
 
 int min_distance_index;
 
@@ -28,19 +30,19 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         boundaryPoints.resize(ranges_size);
         obstaclePoints.resize(ranges_size);
         boundaryDistances.resize(ranges_size);
-        float step = (fov_deg / ranges_size) * M_PI / 180.0f;
-        float start_angle = (-fov_deg / 2.0f) * M_PI / 180.0f;
+        step = (fov_deg / ranges_size) * M_PI / 180.0f;
+        start_angle = (-fov_deg / 2.0f) * M_PI / 180.0f;
         for (int i = 0; i < ranges_size; ++i) {
             float theta = start_angle + i * step;
             float sin_t = sin(theta);
             float cos_t = cos(theta);
-            float disc = R*R - dL ^ 2 * sin_t ^ 2; // We know that disc > 0 because the LIDAR is in the robot's boundaries
+            float disc = R*R - pow(dL, 2) * pow(sin_t, 2); // We know that disc > 0 because the LIDAR is in the robot's boundaries
             if (disc < 0) disc = 0;  // just in case of numerical round-off
 
             double t_exit = -dL * cos_t + sqrt(disc);
 
-            boundaryPoints[i].x = dL + t_exit * c;
-            boundaryPoints[i].y =        t_exit * s;
+            boundaryPoints[i].x = dL + t_exit * cos_t;
+            boundaryPoints[i].y =        t_exit * sin_t;
         }
     }
 
@@ -56,7 +58,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     for (size_t j = 0; j < ranges_size; ++j) {
         double min_d = std::numeric_limits<double>::infinity();
-        for (size_t k = 0; k < j + ; ++k) {
+        for (size_t k = 0; k < ranges_size ; ++k) {
             double dx = boundaryPoints[j].x - obstaclePoints[k].x;
             double dy = boundaryPoints[j].y - obstaclePoints[k].y;
             double d2 = dx*dx + dy*dy;
