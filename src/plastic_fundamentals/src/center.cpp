@@ -9,7 +9,7 @@
 
 // --- robot-specific constants ------------------------------------------------
 constexpr double WHEEL_RADIUS_M   = 0.0325;   // 6.5 cm / 2
-constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
+constexpr double TRACK_WIDTH_M    = 0.266;    // 26.3 cm
 
 // -----------------------------------------------------------------------------
 // Spin the robot through `angle_deg` (CCW positive) at the given wheel speed
@@ -43,7 +43,8 @@ void spinInPlace(ros::ServiceClient& diffDrive,
 
 void driveStraight(ros::ServiceClient& diffDrive, double distance, double speed) {
     create_fundamentals::DiffDrive srv;
-    double side = abs(side) / side; // 1 for forward, -1 for backward
+    double side = abs(distance) / distance; // 1 for forward, -1 for backward
+    ROS_INFO("Drive straight : %f", side);
     srv.request.left = side * speed;
     srv.request.right = side * speed;
 
@@ -51,7 +52,7 @@ void driveStraight(ros::ServiceClient& diffDrive, double distance, double speed)
         ROS_ERROR("Failed to send drive forward command!");
     }
 
-    ros::Duration(6.773 * distance).sleep(); // Move forward for the specified time
+    ros::Duration(6.773 / 5 * speed * abs(distance)).sleep(); // Move forward for the specified time
 
     // Stop after moving
     srv.request.left = 0.0;
@@ -75,10 +76,10 @@ std::vector<Point> obstaclePoints;
 std::vector<AngularPoint> angleBoundaryDistances;
 
 const double fov_deg = 240.0;
-const double R     = 0.34;  // 34 cm robot radius
+const double R     = 0.17;  // 34 cm robot radius
 const double dL    = 0.12;  // 12 cm lidar offset
 
-const double lidar_min_distance = 0.01; // 10 cm
+const double lidar_min_distance = 0.05; // 10 cm
 const double lidar_max_distance = 0.95; // 3.5 m
 
 int rays = 0;
@@ -99,7 +100,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     }
 
     float min_distance = std::numeric_limits<double>::infinity();
-    min_distance_index = -1;
+    //min_distance_index = -1;
 
     for (int i = 0; i < rays; ++i) {
         double theta = start_angle + i * step;
@@ -141,12 +142,20 @@ int main(int argc, char **argv) {
     double wheel_speed_rad_s = 3.0;    // wheel angular speed magnitude
 
     while (ros::ok()) {
+        ros::spinOnce();
+        spinInPlace(diffDrive, 90.0, wheel_speed_rad_s);
+        ros::Duration(2.0).sleep();
         if(min_distance_index > 0)  {
-            min_distance_index = -1;
-            spinInPlace(diffDrive, - angleBoundaryDistances[min_distance_index].angle, wheel_speed_rad_s);
-            driveStraight(diffDrive, angleBoundaryDistances[min_distance_index].distance - 40, wheel_speed_rad_s);
+            ROS_INFO("Aligning with min distance: %f degrees", angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI);
+            spinInPlace(diffDrive, - angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI , wheel_speed_rad_s);
+
+            ROS_INFO("Driving straight for alignement, moving %f meters", angleBoundaryDistances[min_distance_index].distance - 0.4);
+            driveStraight(diffDrive, angleBoundaryDistances[min_distance_index].distance - 0.4, wheel_speed_rad_s);
             spinInPlace(diffDrive, 90.0, wheel_speed_rad_s);
+
+            min_distance_index = -1;
         } else {
+            ROS_INFO("No wall found, trying rotating 120");
             spinInPlace(diffDrive, 120.0, wheel_speed_rad_s);
         }
     }
