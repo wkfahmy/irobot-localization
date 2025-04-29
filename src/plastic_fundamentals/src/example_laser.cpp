@@ -1,13 +1,28 @@
 #include "ros/ros.h"
 #include <cstdlib>
 #include "sensor_msgs/LaserScan.h"
+#include <iterator>
 
 
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg)
 {
-  ROS_INFO("%i", msg->ranges.size());
-  ROS_INFO("%f", msg->ranges[msg->ranges.size()/2]);
+
+
+  std::ostringstream oss;
+  for (size_t i = 0; i < msg->ranges.size(); ++i) {
+    oss << msg->ranges[i];
+    if (i != msg->ranges.size() - 1) {
+      oss << ",";
+    }
+  }
+
+  ROS_INFO("Values %s", oss.str().c_str());
+
+
+  //ROS_INFO("%i", msg->ranges.size());
+  //ROS_INFO("%f", msg->ranges[msg->ranges.size()/2]);
 }
+
 
 int main(int argc, char **argv)
 {
