@@ -86,3 +86,11 @@ add_dependencies(center create_fundamentals_generate_messages_cpp)
 add_executable(SpinInPlace src/SpinInPlace.cpp)
 target_link_libraries(SpinInPlace ${catkin_LIBRARIES})
 add_dependencies(SpinInPlace create_fundamentals_generate_messages_cpp)
+
+add_executable(square_with_encoders src/square_with_encoders.cpp)
+target_link_libraries(square_with_encoders ${catkin_LIBRARIES})
+add_dependencies(square_with_encoders create_fundamentals_generate_messages_cpp)
+
+add_executable(square_no_sensors_geom src/square_no_sensors_geom.cpp)
+target_link_libraries(square_no_sensors_geom ${catkin_LIBRARIES})
+add_dependencies(square_no_sensors_geom create_fundamentals_generate_messages_cpp)
