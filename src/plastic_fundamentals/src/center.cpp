@@ -44,7 +44,6 @@ void spinInPlace(ros::ServiceClient& diffDrive,
 void driveStraight(ros::ServiceClient& diffDrive, double distance, double speed) {
     create_fundamentals::DiffDrive srv;
     double side = abs(distance) / distance; // 1 for forward, -1 for backward
-    ROS_INFO("Drive straight : %f", side);
     srv.request.left = side * speed;
     srv.request.right = side * speed;
 
@@ -76,17 +75,18 @@ std::vector<Point> obstaclePoints;
 std::vector<AngularPoint> angleBoundaryDistances;
 
 const double fov_deg = 240.0;
-const double R     = 0.17;  // 34 cm robot radius
+const double R     = 0.17;  // 17 cm robot radius
 const double dL    = 0.12;  // 12 cm lidar offset
 
 const double lidar_min_distance = 0.05; // 10 cm
-const double lidar_max_distance = 0.95; // 3.5 m
+const double lidar_max_distance = 0.80; // 3.5 m
 
 int rays = 0;
 double step = -1.0;
 double start_angle = -1.0;
 
 int min_distance_index = -1;
+int front_index = -1;
 
 void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     rays = msg->ranges.size();
@@ -99,8 +99,8 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         start_angle = (-fov_deg / 2.0) * M_PI / 180.0;
     }
 
-    float min_distance = std::numeric_limits<double>::infinity();
-    //min_distance_index = -1;
+    double min_distance = std::numeric_limits<double>::infinity();
+    double min_angle = std::numeric_limits<double>::infinity();
 
     for (int i = 0; i < rays; ++i) {
         double theta = start_angle + i * step;
@@ -111,14 +111,19 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             obstaclePoints[i].x = std::numeric_limits<double>::infinity();
             obstaclePoints[i].y = std::numeric_limits<double>::infinity();
 
-            angleBoundaryDistances[i].angle = 0;
+            angleBoundaryDistances[i].angle = M_PI;
             angleBoundaryDistances[i].distance = std::numeric_limits<double>::infinity();
         } else {
             obstaclePoints[i].x = dL + distance * cos_t;
             obstaclePoints[i].y = distance * sin_t;
 
-            angleBoundaryDistances[i].angle = atan2(obstaclePoints[i].x, obstaclePoints[i].y);
-            angleBoundaryDistances[i].distance = std::sqrt(pow(obstaclePoints[i].x,2) + pow(obstaclePoints[i].y,2)) - R;
+            angleBoundaryDistances[i].angle = atan2(obstaclePoints[i].x, obstaclePoints[i].y) - M_PI / 2.0;
+            angleBoundaryDistances[i].distance = std::sqrt(pow(obstaclePoints[i].x,2) + pow(obstaclePoints[i].y,2));
+        }
+
+        if(angleBoundaryDistances[i].angle < min_angle) {
+            min_angle = angleBoundaryDistances[i].angle;
+            front_index = i;
         }
 
         if (angleBoundaryDistances[i].distance < min_distance) {
@@ -126,6 +131,60 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             min_distance_index = i;
         }
     }
+}
+
+enum Facing {
+    CORNER,
+    LEFT_WALL,
+    RIGHT_WALL,
+    WALL,
+    NONE
+};
+
+
+Facing facing() {
+    if (front_index > 0) {
+        double front_angle = angleBoundaryDistances[front_index].angle;
+        double front_distance = angleBoundaryDistances[front_index].distance;
+        double check_angle = atan((R - 0.02) / angleBoundaryDistances[min_distance_index].distance);
+
+        double left_distance = std::numeric_limits<double>::infinity();
+        double left_angle = std::numeric_limits<double>::infinity();
+        double right_distance = std::numeric_limits<double>::infinity();
+        double right_angle = std::numeric_limits<double>::infinity();
+
+        for (int i = front_index; i < rays; --i) {
+            if (abs(angleBoundaryDistances[i].angle - check_angle) < abs(left_angle - check_angle)) {
+                left_angle = angleBoundaryDistances[i].angle;
+                left_distance = angleBoundaryDistances[i].distance;
+            } else {
+                break;
+            }
+        }
+
+        for (int i = front_index; i < rays; ++i) {
+            if (abs(angleBoundaryDistances[i].angle - check_angle) < abs(right_angle - check_angle)) {
+                right_angle = angleBoundaryDistances[i].angle;
+                right_distance = angleBoundaryDistances[i].distance;
+            } else {
+                break;
+            }
+        }
+
+        bool left_wall = abs(left_distance - front_distance / cos(left_angle)) < 0.02;
+        bool right_wall = abs(right_distance - front_distance / cos(right_angle)) < 0.02;
+
+        if (left_wall && right_wall) {
+            return WALL;
+        } else if(left_wall) {
+            return LEFT_WALL;
+        } else if(right_wall) {
+            return RIGHT_WALL;
+        } else {
+            return CORNER;
+        }
+    }
+    return NONE;
 }
 
 int main(int argc, char **argv) {
@@ -143,15 +202,59 @@ int main(int argc, char **argv) {
 
     while (ros::ok()) {
         ros::spinOnce();
-        spinInPlace(diffDrive, 90.0, wheel_speed_rad_s);
-        ros::Duration(2.0).sleep();
+
         if(min_distance_index > 0)  {
             ROS_INFO("Aligning with min distance: %f degrees", angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI);
             spinInPlace(diffDrive, - angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI , wheel_speed_rad_s);
 
-            ROS_INFO("Driving straight for alignement, moving %f meters", angleBoundaryDistances[min_distance_index].distance - 0.4);
-            driveStraight(diffDrive, angleBoundaryDistances[min_distance_index].distance - 0.4, wheel_speed_rad_s);
-            spinInPlace(diffDrive, 90.0, wheel_speed_rad_s);
+            ros::spinOnce();
+
+            Facing f = facing();
+
+            float move_distance = 0.0;
+            float rotation_angle = 0.0;
+            switch (f) {
+                case CORNER:
+                    ROS_INFO("Facing corner");
+                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4 * sqrt(2)), wheel_speed_rad_s);
+                    spinInPlace(diffDrive, 135.0, wheel_speed_rad_s);
+
+                    break;
+                case LEFT_WALL:
+                    ROS_INFO("Facing left wall");
+                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
+                    spinInPlace(diffDrive, -90, wheel_speed_rad_s);
+                    driveStraight(diffDrive, 0.4, wheel_speed_rad_s);
+
+                    break;
+                case RIGHT_WALL:
+                    ROS_INFO("Facing right wall");
+                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
+                    spinInPlace(diffDrive, 90, wheel_speed_rad_s);
+                    driveStraight(diffDrive, 0.4, wheel_speed_rad_s);
+
+                    break;
+                case WALL:
+                    ROS_INFO("Facing wall");
+                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
+
+                    spinInPlace(diffDrive, -135, wheel_speed_rad_s);
+                    ros::spinOnce();
+
+                    if (abs(angleBoundaryDistances[front_index].distance - 0.4 * sqrt(2)) < 0.02) {
+                        spinInPlace(diffDrive, -135, wheel_speed_rad_s);
+                        ros::spinOnce();
+                        if (abs(angleBoundaryDistances[front_index].distance - 0.4 * sqrt(2)) < 0.02) {
+                            ROS_INFO("The robot is centered !");
+                            return 0;
+                        }
+                    }
+
+                    break;
+                case NONE:
+                    ROS_INFO("NONE");
+                    break;
+            }
 
             min_distance_index = -1;
         } else {
