@@ -12,15 +12,92 @@
 #include "ros/ros.h"
 #include "create_fundamentals/DiffDrive.h"
 #include "create_fundamentals/SensorPacket.h"
+#include "create_fundamentals/ResetEncoders.h"
 #include <cmath>
 
-/* ───────── robot geometry (measure once, then leave) ────────────────────── */
-constexpr double WHEEL_RADIUS_M = 0.0325;   //  65 mm Ø  →  32.5 mm radius
-constexpr double TRACK_WIDTH_M  = 0.263;    //  26.3 cm  wheel-to-wheel
+double radius = 0.0325; // radius of the wheel in meters
+double error_factor = 1/0.81; // error factor
+double ticksPerRevolution = 5.0 * error_factor; // ticks per revolution
+double angle_error_factor = 1/0.96; // error factor
+double ticksPerRevolutionRot = 5.0 * angle_error_factor; // ticks per revolution
+double track_width  = 0.263;
 
-/* ───────── chosen wheel speeds (rad s⁻¹) ────────────────────────────────── */
-constexpr double FWD_WHEEL_SPEED_RAD_S  = 2.5;   // forward legs
-constexpr double TURN_WHEEL_SPEED_RAD_S = 2.5;   // in-place spin
+bool translating = false;
+bool rotating = false;
+
+double leftTicks = 0;
+double rightTicks = 0;
+
+double currentLeftTicks = 0;
+
+
+ros::ServiceClient* diffDriveClient;
+create_fundamentals::DiffDrive srv;
+
+ros::ServiceClient* resetEncodersClient;
+
+void resetEncoders() {
+    ROS_INFO("Resetting the encoders");
+    create_fundamentals::ResetEncoders srv;
+    if(resetEncodersClient->call(srv)) {
+        leftTicks = 0;
+        rightTicks = 0;
+    }
+}
+
+double getTranslationTicks(double distance) {
+    return ticksPerRevolution * distance / (2 * M_PI * radius);
+}
+
+double getRotationTicks(double angle_rad) {
+  return ticksPerRevolutionRot * angle_rad * track_width / (4 * M_PI * radius);
+}
+
+void rotate(double angle_rad, double speed) {
+    ROS_INFO("Rotation: %f", angle_rad);
+    double side = std::floor(abs(angle_rad) / angle_rad);
+
+    double ticks = getRotationTicks(angle_rad);
+
+    resetEncoders();
+
+    srv.request.left = - side * speed;
+    srv.request.right = side * speed;
+    diffDriveClient->call(srv);
+
+    while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
+        ros::spinOnce();
+    }
+
+    srv.request.left = 0;
+    srv.request.right = 0;
+    diffDriveClient->call(srv);
+
+    resetEncoders();
+}
+
+void translate(double distance, double speed) {
+    ROS_INFO("Translation: %f", distance);
+    double side = std::floor(abs(distance) / distance);
+
+    double ticks = getTranslationTicks(distance);
+
+    resetEncoders();
+    ros::spinOnce();
+
+    srv.request.left = side * speed;
+    srv.request.right = side * speed;
+    diffDriveClient->call(srv);
+
+    while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
+        ros::spinOnce();
+    }
+
+    srv.request.left = 0;
+    srv.request.right = 0;
+    diffDriveClient->call(srv);
+    resetEncoders();
+}
 
 /* ───────── globals filled by sensor callback ────────────────────────────── */
 static double enc_left  = 0.0;      // cumulative wheel radians
@@ -29,83 +106,34 @@ static bool   enc_ok    = false;
 
 void sensorCB(const create_fundamentals::SensorPacket::ConstPtr& msg)
 {
-    enc_left  = msg->encoderLeft;
-    enc_right = msg->encoderRight;
-    enc_ok    = true;
+  ROS_INFO("left encoder: %f, right encoder: %f", msg->encoderLeft, msg->encoderRight);
+
+  leftTicks = msg->encoderLeft;
+  rightTicks = msg->encoderRight;
 }
 
-/* helper: set wheel speeds via diff_drive */
-void setWheels(ros::ServiceClient& cli, double left, double right)
+
+
+int main(int argc, char **argv)
 {
-    create_fundamentals::DiffDrive srv;
-    srv.request.left  = left;
-    srv.request.right = right;
-    if (!cli.call(srv))
-        ROS_ERROR("diff_drive call failed");
-}
+  ros::init(argc, argv, "square_with_encoders");
+  ros::NodeHandle n;
 
-/* helper: compute Δs, Δθ between two encoder snapshots                      *
- * enc units = wheel radians (already scaled by driver)                      */
-inline void deltas(double L0,double R0,double L1,double R1,
-                   double& ds,double& dtheta)
-{
-    double dL = (L1 - L0) * WHEEL_RADIUS_M;            // metres
-    double dR = (R1 - R0) * WHEEL_RADIUS_M;            // metres
-    ds     = 0.5 * (dL + dR);                          // centre travel
-    dtheta = (dR - dL) / TRACK_WIDTH_M;                // body rotation
-}
+  ros::Subscriber sub = n.subscribe("sensor_packet", 1, sensorCallback);
+  ros::ServiceClient diffDrive = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
+  diffDriveClient = &diffDrive;
+  ros::ServiceClient resetEncoders = n.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
+  resetEncodersClient = &resetEncoders;
 
-/* ======================================================================== */
-int main(int argc,char** argv)
-{
-    ros::init(argc, argv, "square_with_encoders");
-    ros::NodeHandle nh;
+  double speed = 6.0;
 
-    ros::Subscriber sub = nh.subscribe("sensor_packet",1,sensorCB);
-    ros::ServiceClient diff =
-        nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
-    ros::service::waitForService("diff_drive");
 
-    /* wait for first encoder packet */
-    ROS_INFO("Waiting for encoders …");
-    ros::Rate wait_r(20);
-    while (ros::ok() && !enc_ok) { ros::spinOnce(); wait_r.sleep(); }
-    ROS_INFO("Encoders online – starting square.");
-
-    ros::Rate loop(50);                      // 50 Hz control loop
-
-    for (int edge=0; edge<4 && ros::ok(); ++edge)
-    {
-        /* ── 1 m straight ─────────────────────────────────────────────── */
-        double L0 = enc_left, R0 = enc_right;
-        setWheels(diff,  FWD_WHEEL_SPEED_RAD_S,  FWD_WHEEL_SPEED_RAD_S);
-
-        while (ros::ok())
-        {
-            ros::spinOnce();
-            double ds,dth; deltas(L0,R0,enc_left,enc_right,ds,dth);
-            if (ds >= 1.0) break;
-            loop.sleep();
-        }
-        setWheels(diff, 0.0, 0.0);
-        ros::Duration(0.3).sleep();          // damp residual motion
-
-        /* ── 90 ° CCW turn ────────────────────────────────────────────── */
-        L0 = enc_left; R0 = enc_right;
-        setWheels(diff, -TURN_WHEEL_SPEED_RAD_S,  TURN_WHEEL_SPEED_RAD_S);
-
-        while (ros::ok())
-        {
-            ros::spinOnce();
-            double ds,dth; deltas(L0,R0,enc_left,enc_right,ds,dth);
-            if (dth >= M_PI/2.0) break;      // reached +90 °
-            loop.sleep();
-        }
-        setWheels(diff, 0.0, 0.0);
-        ros::Duration(0.3).sleep();
+    for (int i = 0; i < 20; i++) {
+        translate(1.0, speed);
+        ros::Duration(1.0).sleep();
+        rotate(M_PI / 2, speed);
+        ros::Duration(1.0).sleep();
     }
 
-    ROS_INFO("Encoder-closed square complete.");
-    setWheels(diff, 0.0, 0.0);               // final safety stop
-    return 0;
+  return 0;
 }

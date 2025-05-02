@@ -22,7 +22,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg){
      // Compute indices for -45 to +45 degrees
      start_index = std::max(0, static_cast<int>((angle_min_limit - msg->angle_min) / msg->angle_increment));
      end_index = std::min(static_cast<int>(msg->ranges.size()) - 1, static_cast<int>((angle_max_limit - msg->angle_min) / msg->angle_increment));
- 
+
     for(int i = start_index; i < end_index; i++){
         float value = msg->ranges[i];
         if(!isnan(value) && value >= msg->range_min && value <= msg->range_max){

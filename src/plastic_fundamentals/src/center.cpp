@@ -204,39 +204,39 @@ int main(int argc, char **argv) {
         ros::spinOnce();
 
         if(min_distance_index > 0)  {
-            ROS_INFO("Aligning with min distance: %f degrees", angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI);
-            spinInPlace(diffDrive, - angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI , wheel_speed_rad_s);
+			//ROS_INFO("Minimum angle: %f", min_angle);
+			//ROS_INFO("Front: %d", front_index);
+			//ROS_INFO("Min distance index : %d", min_distance_index);
+            //ROS_INFO("Aligning with min distance: %f degrees", angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI);
+            //spinInPlace(diffDrive, - angleBoundaryDistances[min_distance_index].angle * 180.0 / M_PI , wheel_speed_rad_s);
 
-            ros::spinOnce();
+            //ros::spinOnce();
 
             Facing f = facing();
-
-            float move_distance = 0.0;
-            float rotation_angle = 0.0;
             switch (f) {
                 case CORNER:
                     ROS_INFO("Facing corner");
-                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4 * sqrt(2)), wheel_speed_rad_s);
-                    spinInPlace(diffDrive, 135.0, wheel_speed_rad_s);
+                    //driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4 * sqrt(2)), wheel_speed_rad_s);
+                    //spinInPlace(diffDrive, 135.0, wheel_speed_rad_s);
 
                     break;
                 case LEFT_WALL:
                     ROS_INFO("Facing left wall");
-                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
-                    spinInPlace(diffDrive, -90, wheel_speed_rad_s);
-                    driveStraight(diffDrive, 0.4, wheel_speed_rad_s);
+                    //driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
+                    //spinInPlace(diffDrive, -90, wheel_speed_rad_s);
+                    //driveStraight(diffDrive, 0.4, wheel_speed_rad_s);
 
                     break;
                 case RIGHT_WALL:
                     ROS_INFO("Facing right wall");
-                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
-                    spinInPlace(diffDrive, 90, wheel_speed_rad_s);
-                    driveStraight(diffDrive, 0.4, wheel_speed_rad_s);
+                    //driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
+                    //spinInPlace(diffDrive, 90, wheel_speed_rad_s);
+                    //driveStraight(diffDrive, 0.4, wheel_speed_rad_s);
 
                     break;
                 case WALL:
                     ROS_INFO("Facing wall");
-                    driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
+                    /*driveStraight(diffDrive, - (angleBoundaryDistances[front_index].distance - 0.4), wheel_speed_rad_s);
 
                     spinInPlace(diffDrive, -135, wheel_speed_rad_s);
                     ros::spinOnce();
@@ -248,7 +248,7 @@ int main(int argc, char **argv) {
                             ROS_INFO("The robot is centered !");
                             return 0;
                         }
-                    }
+                    }*/
 
                     break;
                 case NONE:
@@ -257,9 +257,12 @@ int main(int argc, char **argv) {
             }
 
             min_distance_index = -1;
+
+			return 0;
         } else {
             ROS_INFO("No wall found, trying rotating 120");
-            spinInPlace(diffDrive, 120.0, wheel_speed_rad_s);
+			ros::Duration(1).sleep();
+            //spinInPlace(diffDrive, 120.0, wheel_speed_rad_s);
         }
     }
 
