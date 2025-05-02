@@ -98,3 +98,8 @@ add_dependencies(square_no_sensors_geom create_fundamentals_generate_messages_cp
 add_executable(square_with_encoders_controller src/square_with_encoders_controller.cpp)
 target_link_libraries(square_with_encoders_controller ${catkin_LIBRARIES})
 add_dependencies(square_with_encoders_controller create_fundamentals_generate_messages_cpp)
+
+add_executable(align src/square_with_encoders_controller.cpp)
+target_link_libraries(align ${catkin_LIBRARIES})
+add_dependencies(align create_fundamentals_generate_messages_cpp)
+
