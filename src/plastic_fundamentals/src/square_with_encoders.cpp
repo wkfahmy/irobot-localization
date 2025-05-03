@@ -19,7 +19,8 @@ double radius = 0.0325; // radius of the wheel in meters
 double error_factor = 1/0.81; // error factor
 double ticksPerRevolution = 5.0 * error_factor; // ticks per revolution
 double angle_error_factor = 1/0.96; // error factor
-double ticksPerRevolutionRot = 5.0 * angle_error_factor; // ticks per revolution
+//double ticksPerRevolutionRot = 7.035; // ticks per revolution
+double ticksPerRevolutionRot = 5.7; // ticks per revolution
 double track_width  = 0.263;
 
 bool translating = false;
@@ -63,9 +64,26 @@ void rotate(double angle_rad, double speed) {
 
     srv.request.left = - side * speed;
     srv.request.right = side * speed;
-    diffDriveClient->call(srv);
 
+    double correction = 0.0;
+    ros::spinOnce();
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
+
+        if (rightTicks != 0.0) {
+            correction = 1 - abs(leftTicks) / abs(rightTicks);
+            srv.request.left = - side * speed * (1 + correction / 2);
+            srv.request.right = side * speed * (1 - correction / 2);
+        }
+        diffDriveClient->call(srv);
+        ros::spinOnce();
+    }
+
+    while (abs(leftTicks - ticks) >  0.1 || abs(rightTicks - ticks) >  0.1) {
+        double offset = std::max(abs(leftTicks - ticks), abs(rightTicks - ticks));
+        srv.request.left = offset * side;
+        srv.request.right = -offset * side;
+        diffDriveClient->call(srv);
+
         ros::spinOnce();
     }
 
@@ -87,10 +105,17 @@ void translate(double distance, double speed) {
 
     srv.request.left = side * speed;
     srv.request.right = side * speed;
-    diffDriveClient->call(srv);
 
+    double correction = 0.0;
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
         ros::spinOnce();
+
+        if (rightTicks != 0.0) {
+            correction = 1 - abs(leftTicks) / abs(rightTicks);
+            srv.request.left = side * speed * (1 + correction / 2);
+            srv.request.right = side * speed * (1 - correction / 2);
+        }
+        diffDriveClient->call(srv);
     }
 
     srv.request.left = 0;
@@ -128,12 +153,12 @@ int main(int argc, char **argv)
   double speed = 6.0;
 
 
-    for (int i = 0; i < 20; i++) {
-        translate(1.0, speed);
-        ros::Duration(1.0).sleep();
+  for (int i = 0; i < 20; i++) {
+        //translate(1.0, speed * 2);
+        //ros::Duration(1.0).sleep();
         rotate(M_PI / 2, speed);
         ros::Duration(1.0).sleep();
-    }
+  }
 
   return 0;
 }

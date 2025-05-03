@@ -34,7 +34,7 @@ static const double radius = 0.0325;        // wheel radius (m)
 static const double error_factor = 1.0/0.81;
 static const double ticksPerRevolution = 5.0 * error_factor;
 static const double angle_error_factor = 1.0/0.96;
-static const double ticksPerRevolutionRot = 5.0;
+static const double ticksPerRevolutionRot = 7.035;
 static const double track_width  = 0.263;
 
 // Encoder readings
@@ -117,7 +117,7 @@ void rotate(double angle_rad, double max_speed) {
     resetEncoders();
     pidRot.reset();
     ros::Time lastTime = ros::Time::now();
-
+    double correction = 0.0;
     ros::Rate rate(50);
     while (ros::ok()) {
         ros::spinOnce();
@@ -131,8 +131,12 @@ void rotate(double angle_rad, double max_speed) {
         controlSignal = std::max(-max_speed, std::min(max_speed, controlSignal));
 
         // One wheel forward, one backward for rotation
-        srv.request.left  = -side * controlSignal;
-        srv.request.right =  side * controlSignal;
+
+        if (rightTicks != 0.0) {
+            correction = 1 - abs(leftTicks) / abs(rightTicks);
+        }
+        srv.request.left  = -side * controlSignal;// * (1 + correction / 4);
+        srv.request.right =  side * controlSignal;// * (1 - correction / 4);
         diffDriveClient->call(srv);
 
         if (std::abs(targetTicks - currentTicks) < 1.0) break;
@@ -162,18 +166,18 @@ int main(int argc, char** argv) {
     pidTrans = PID(kp_t, ki_t, kd_t);
 
     double kp_r, ki_r, kd_r;
-    nh.param("kp_rot", kp_r, 0.5);
-    nh.param("ki_rot", ki_r, 0.01);
-    nh.param("kd_rot", kd_r, 0.1);
+    nh.param("kp_rot", kp_r, 0.8);
+    nh.param("ki_rot", ki_r, 0.0);
+    nh.param("kd_rot", kd_r, 0.0);
     pidRot = PID(kp_r, ki_r, kd_r);
 
     // Execute a square path
     double speed = 6.0;
-    for (int i = 0; i < 1 && ros::ok(); ++i) {
-        translate(1.0, speed);
-        ros::Duration(1.0).sleep();
-        //rotate(M_PI, speed);
+    for (int i = 0; i < 8 && ros::ok(); ++i) {
+        //translate(1.0, speed);
         //ros::Duration(1.0).sleep();
+        rotate(M_PI / 2, speed);
+        ros::Duration(0.5).sleep();
     }
     return 0;
 }
