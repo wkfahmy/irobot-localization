@@ -25,21 +25,18 @@ void spinInPlace(ros::ServiceClient& diffDrive,
                  double angle_rad,
                  double wheel_speed_rad_s)
 {
-    // 1. Work out how long we must turn
-    const double omega_robot = 2.0 * WHEEL_RADIUS_M * wheel_speed_rad_s / TRACK_WIDTH_M; // rad/s
+    const double omega_robot = 2.0 * WHEEL_RADIUS_M * wheel_speed_rad_s / TRACK_WIDTH_M;
     const double duration_s = std::fabs(angle_rad) / std::fabs(omega_robot);
 
-    // 2. Build DiffDrive request (sign decides direction)
     create_fundamentals::DiffDrive srv;
     srv.request.right = (angle_rad >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
-    srv.request.left = -(srv.request.right); // opposite direction for pure spin
+    srv.request.left = -(srv.request.right);
 
     if (!diffDrive.call(srv))
         ROS_ERROR("Failed to send spin command!");
 
-    ros::Duration(duration_s).sleep(); // 3. Wait while wheels spin
+    ros::Duration(duration_s).sleep();
 
-    // 4. Stop
     srv.request.left = 0.0;
     srv.request.right = 0.0;
     if (!diffDrive.call(srv))
@@ -50,21 +47,18 @@ void moveLinear(ros::ServiceClient& diffDrive,
                 double distance_m,
                 double wheel_speed_rad_s)
 {
-    // 1. Work out how long we must move
-    const double linear_speed = WHEEL_RADIUS_M * wheel_speed_rad_s; // m/s
+    const double linear_speed = WHEEL_RADIUS_M * wheel_speed_rad_s;
     const double duration_s = std::fabs(distance_m) / std::fabs(linear_speed);
 
-    // 2. Build DiffDrive request (sign decides direction)
     create_fundamentals::DiffDrive srv;
     srv.request.left = (distance_m >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
-    srv.request.right = srv.request.left; // same direction for linear motion
+    srv.request.right = srv.request.left;
 
     if (!diffDrive.call(srv))
         ROS_ERROR("Failed to send move command!");
 
-    ros::Duration(duration_s).sleep(); // 3. Wait while wheels move
+    ros::Duration(duration_s).sleep();
 
-    // 4. Stop
     srv.request.left = 0.0;
     srv.request.right = 0.0;
     if (!diffDrive.call(srv))
@@ -101,11 +95,6 @@ void correctNormalDirection(Line& line, const std::vector<float>& x, const std::
         line.c_dash *= -1;
     }
 }
-
-
-
-//considering lidar sensor as the origin
-
 
 Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
     ROS_INFO("currently in ransac");
@@ -195,7 +184,7 @@ void publishLineMarker(const Line& line, const std::vector<float>& x, const std:
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     callback_count++;
-    ros::Duration(0.5).sleep(); // Wait for a moment
+    ros::Duration(0.5).sleep();
 
     if (processing_done) return;  // Ignore further callbacks
 
@@ -211,7 +200,6 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             y.push_back(r * sin(angle));
         }
     }
-
 
     std::vector<bool> used(x.size(), false);   // to track used points
     std::vector<Line> lines; // to store detected lines by RANSAC
@@ -259,8 +247,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         float distance2 = fabs(perpendicular_lines[1].c_dash);
         if(distance1 > 0.8 || distance2 > 0.8) {
             ROS_INFO("Distance to wall is too far, rotating 180 degrees");
-            spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees
-            ros::Duration(0.5).sleep(); // Wait for a moment
+            spinInPlace(*diff_drive_client, M_PI, 3.0);
+            ros::Duration(0.5).sleep();
             return;
         }
         float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
@@ -272,7 +260,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         // Align with the first line
         spinInPlace(*diff_drive_client, angle, 3.0);
 
-        ros::Duration(0.5).sleep(); // Wait for a moment
+        ros::Duration(0.5).sleep();
         moveLinear(*diff_drive_client, center_distance1 - 0.4, 3.0);
 
         // Determine turn direction and align with the second line
@@ -280,18 +268,18 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                             perpendicular_lines[0].b_dash * perpendicular_lines[1].a_dash) > 0 ? -M_PI_2 : M_PI_2;
         spinInPlace(*diff_drive_client, turn_angle, 3.0);
 
-        ros::Duration(0.5).sleep(); // Wait for a moment
+        ros::Duration(0.5).sleep();
 
         // Move to the center of the cell
         moveLinear(*diff_drive_client, -(center_distance2 - 0.4), 3.0);
         if(callback_count > 2) {
-            processing_done = true;  // Mark that we're done
-            ros::shutdown();         // Exit the node cleanly
+            processing_done = true;
+            ros::shutdown();
         }
     }
     else {
-        spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees if no lines found
-        ros::Duration(0.5).sleep(); // Wait for a moment
+        spinInPlace(*diff_drive_client, M_PI, 3.0);
+        ros::Duration(0.5).sleep();
     }
 }
 
@@ -307,7 +295,7 @@ int main(int argc, char** argv) {
     marker_pub = n.advertise<visualization_msgs::Marker>("/lines", 10);
 
      // Keep spinning until we're done
-    ros::Rate rate(10); // 10 Hz loop
+    ros::Rate rate(10);
     while (ros::ok() && !processing_done) {
         ros::spinOnce();
         rate.sleep();
