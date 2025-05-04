@@ -12,17 +12,81 @@ float wheel_separation = 0.266;
 const int MIN_INLIERS = 30; // minimum inliers to consider a line valid
 const int MAX_ITERATIONS = 100; // maximum iterations for RANSAC
 const float DISTANCE_THRESHOLD = 0.05; // distance threshold for inliers
-const float WHEEL_RADIUS = 0.0325; // wheel radius in meters
+const float DISTANCE_FROM_LIDAR = 0.28; // distance from the lidar to the wall
+constexpr double WHEEL_RADIUS_M   = 0.0325;   // 6.5 cm / 2
+constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
+
+bool processing_done = false; // Flag to indicate if processing is done
+
+float min_distance;
+int min_index;
+int start_index;
+int end_index;
+
+void spinInPlace(ros::ServiceClient& diffDrive,
+                 double angle_rad,
+                 double wheel_speed_rad_s)
+{
+    // 1. Work out how long we must turn
+    const double omega_robot = 2.0 * WHEEL_RADIUS_M * wheel_speed_rad_s / TRACK_WIDTH_M; // rad/s
+    const double duration_s = std::fabs(angle_rad) / std::fabs(omega_robot);
+
+    // 2. Build DiffDrive request (sign decides direction)
+    create_fundamentals::DiffDrive srv;
+    srv.request.right = (angle_rad >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
+    srv.request.left = -(srv.request.right); // opposite direction for pure spin
+
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send spin command!");
+
+    ros::Duration(duration_s).sleep(); // 3. Wait while wheels spin
+
+    // 4. Stop
+    srv.request.left = 0.0;
+    srv.request.right = 0.0;
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send stop command!");
+}
+
+void moveLinear(ros::ServiceClient& diffDrive,
+                double distance_m,
+                double wheel_speed_rad_s)
+{
+    // 1. Work out how long we must move
+    const double linear_speed = WHEEL_RADIUS_M * wheel_speed_rad_s; // m/s
+    const double duration_s = std::fabs(distance_m) / std::fabs(linear_speed);
+
+    // 2. Build DiffDrive request (sign decides direction)
+    create_fundamentals::DiffDrive srv;
+    srv.request.left = (distance_m >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
+    srv.request.right = srv.request.left; // same direction for linear motion
+
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send move command!");
+
+    ros::Duration(duration_s).sleep(); // 3. Wait while wheels move
+
+    // 4. Stop
+    srv.request.left = 0.0;
+    srv.request.right = 0.0;
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send stop command!");
+}
+
+
+
+
+//considering lidar sensor as the origin
 
 struct Line {
-    float a, b, c; // ax + by + c = 0
+    float a_dash, b_dash, c_dash; // ax + by + c = 0
     std::vector<int> inliers;
 };
 
 Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
     int best_inliers = 0;
     Line best_line = {0, 0, 0, {}};
-    size_t N = x.size();
+    size_t N = x.size();  // number of points
 
     for (int i = 0; i < iterations; ++i) {
         int i1, i2;
@@ -86,6 +150,12 @@ void publishLineMarker(const Line& line, const std::vector<float>& x, const std:
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
+
+    if (processing_done) return;  // Ignore further callbacks
+
+    min_distance = std::numeric_limits<float>::infinity();
+    min_index = -1;
+
     std::vector<float> x, y;
     //convert lidar polar coordinates to cartesian
     for (size_t i = 0; i < msg->ranges.size(); ++i) {
@@ -94,6 +164,11 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             float angle = msg->angle_min + i * msg->angle_increment;
             x.push_back(r * cos(angle));
             y.push_back(r * sin(angle));
+            // Check if the value is less than the current minimum distance
+            if (r < min_distance) {
+                min_distance = r;
+                min_index = i;
+            }
         }
     }
 
@@ -111,49 +186,76 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (lines.empty()) return; // no lines found
 
-    // Choose line closest to robot (min |c|)
-    Line best = *std::min_element(lines.begin(), lines.end(), [](const Line& l1, const Line& l2) {      //shows the line with the smallest c as the best line
-        return fabs(l1.c) < fabs(l2.c);
-    });
+    // Find the pair of perpendicular lines closest to the LiDAR (origin)
+    std::vector<Line> perpendicular_lines;
+    float min_total_distance = std::numeric_limits<float>::max();
 
-    float distance = fabs(best.c); // distance to wall
-    float angle = atan2(best.b, best.a) + M_PI_2; // robot should face perpendicular  (angle of the line + 90 degrees so robot is facing the normal of the line)
+    for (size_t i = 0; i < lines.size(); ++i) {
+        for (size_t j = i + 1; j < lines.size(); ++j) {
+            float dot = lines[i].a_dash * lines[j].a_dash + lines[i].b_dash * lines[j].b_dash;
+            if (fabs(dot) < 0.1) { // approx. perpendicular
 
-    float target_distance = 0.4; // center of 80cm cell
-    float linear_error = target_distance - distance; // distance to the center
-    float angular_error = angle;  // angle to rotate to face the line
+                float distance1 = fabs(lines[i].c_dash);  // distance from origin to line 1
+                float distance2 = fabs(lines[j].c_dash);  // distance from origin to line 2
+                float total_distance = distance1 + distance2;
 
-    create_fundamentals::DiffDrive srv;
-    float Kp_lin = 2.0;
-    float Kp_ang = 2.0;
-    float v = Kp_lin * linear_error;
-    float w = Kp_ang * angular_error;
-
-    float v_left = v - w * wheel_separation / 1.0;
-    float v_right = v + w * wheel_separation / 2.0;
-
-    float omega_left = v_left / WHEEL_RADIUS;
-    float omega_right = v_right / WHEEL_RADIUS;
-    
-    if (fabs(linear_error) < 0.02 && fabs(angular_error) < 0.02) {
-        omega_left = 0; omega_right = 0;
+                if (total_distance < min_total_distance) {
+                    min_total_distance = total_distance;
+                    perpendicular_lines.clear();
+                    perpendicular_lines.push_back(lines[i]);
+                    perpendicular_lines.push_back(lines[j]);
+                }
+            }
+        }
     }
-    
-    srv.request.left = omega_left;
-    srv.request.right = omega_right;
-    diff_drive_client->call(srv);
+
+    bool found_perpendicular = !perpendicular_lines.empty();
+
+    if (found_perpendicular) {
+        // Calculate distances and angles
+        float distance1 = fabs(perpendicular_lines[0].c_dash);
+        float distance2 = fabs(perpendicular_lines[1].c_dash);
+        float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
+
+        // Adjust distances to center
+        float center_distance1 = distance1 + 0.12 * cos(angle);
+        float center_distance2 = distance2 - 0.12 * sin(angle);
+
+        // Align with the first line
+        spinInPlace(*diff_drive_client, angle, 3.0);
+        moveLinear(*diff_drive_client, center_distance1 - 0.4, 3.0);
+
+        // Determine turn direction and align with the second line
+        float turn_angle = (perpendicular_lines[0].a_dash * perpendicular_lines[1].b_dash - 
+                            perpendicular_lines[0].b_dash * perpendicular_lines[1].a_dash) > 0 ? -M_PI_2 : M_PI_2;
+        spinInPlace(*diff_drive_client, turn_angle, 3.0);
+
+        // Move to the center of the cell
+        moveLinear(*diff_drive_client, center_distance2 - 0.4, 3.0);
+
+        processing_done = true;  // Mark that we're done
+        ros::shutdown();         // Exit the node cleanly
+    }
+    else {
+        spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees if no lines found
+    }
 }
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "align_node");
-    ros::NodeHandle nh;
+    ros::NodeHandle n;
 
-    ros::Subscriber sub = nh.subscribe("scan_filtered", 1, scanCallback);
-    ros::ServiceClient client = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
+    ros::Subscriber sub = n.subscribe("scan_filtered", 1, scanCallback);
+    ros::ServiceClient client = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     diff_drive_client = &client;
 
-    marker_pub = nh.advertise<visualization_msgs::Marker>("/lines", 10);
+    marker_pub = n.advertise<visualization_msgs::Marker>("/lines", 10);
 
-    ros::spin();
+     // Keep spinning until we're done
+    ros::Rate rate(10); // 10 Hz loop
+    while (ros::ok() && !processing_done) {
+        ros::spinOnce();
+        rate.sleep();
+    }
     return 0;
-} 
+}
