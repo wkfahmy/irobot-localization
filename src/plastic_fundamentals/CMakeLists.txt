@@ -63,14 +63,6 @@ catkin_package(
 
 include_directories(include ${catkin_INCLUDE_DIRS})
 
-add_executable(example_laser src/example_laser.cpp)
-target_link_libraries(example_laser ${catkin_LIBRARIES})
-add_dependencies(example_laser create_fundamentals_generate_messages_cpp)
-
-add_executable(example_moving src/example_moving.cpp)
-target_link_libraries(example_moving ${catkin_LIBRARIES})
-add_dependencies(example_moving create_fundamentals_generate_messages_cpp)
-
 add_executable(wanderer src/wanderer.cpp)
 target_link_libraries(wanderer ${catkin_LIBRARIES})
 add_dependencies(wanderer create_fundamentals_generate_messages_cpp)
@@ -79,39 +71,12 @@ add_executable(square_no_sensors src/square_no_sensors.cpp)
 target_link_libraries(square_no_sensors ${catkin_LIBRARIES})
 add_dependencies(square_no_sensors create_fundamentals_generate_messages_cpp)
 
-add_executable(center src/center.cpp)
-target_link_libraries(center ${catkin_LIBRARIES})
-add_dependencies(center create_fundamentals_generate_messages_cpp)
-
-add_executable(SpinInPlace src/SpinInPlace.cpp)
-target_link_libraries(SpinInPlace ${catkin_LIBRARIES})
-add_dependencies(SpinInPlace create_fundamentals_generate_messages_cpp)
-
 add_executable(square_with_encoders src/square_with_encoders.cpp)
 target_link_libraries(square_with_encoders ${catkin_LIBRARIES})
 add_dependencies(square_with_encoders create_fundamentals_generate_messages_cpp)
 
-add_executable(square_no_sensors_geom src/square_no_sensors_geom.cpp)
-target_link_libraries(square_no_sensors_geom ${catkin_LIBRARIES})
-add_dependencies(square_no_sensors_geom create_fundamentals_generate_messages_cpp)
-
-add_executable(square_with_encoders_controller src/square_with_encoders_controller.cpp)
-target_link_libraries(square_with_encoders_controller ${catkin_LIBRARIES})
-add_dependencies(square_with_encoders_controller create_fundamentals_generate_messages_cpp)
-
-add_executable(square_with_encoders_pid src/square_with_encoders_pid.cpp)
-target_link_libraries(square_with_encoders_pid ${catkin_LIBRARIES})
-add_dependencies(square_with_encoders_pid create_fundamentals_generate_messages_cpp)
 
 
 add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
-
-add_executable(align2 src/align2.cpp)
-target_link_libraries(align2 ${catkin_LIBRARIES})
-add_dependencies(align2 create_fundamentals_generate_messages_cpp)
-
-add_executable(align_improved src/align_improved.cpp)
-target_link_libraries(align_improved ${catkin_LIBRARIES})
-add_dependencies(align_improved create_fundamentals_generate_messages_cpp)
