@@ -280,8 +280,10 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                             perpendicular_lines[0].b_dash * perpendicular_lines[1].a_dash) > 0 ? -M_PI_2 : M_PI_2;
         spinInPlace(*diff_drive_client, turn_angle, 3.0);
 
+        
+
         // Move to the center of the cell
-        moveLinear(*diff_drive_client, center_distance2 - 0.4, 3.0);
+        moveLinear(*diff_drive_client, -(center_distance2 - 0.4), 3.0);
 
         processing_done = true;  // Mark that we're done
         ros::shutdown();         // Exit the node cleanly
