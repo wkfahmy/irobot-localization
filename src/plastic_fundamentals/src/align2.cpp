@@ -74,26 +74,38 @@ void moveLinear(ros::ServiceClient& diffDrive,
 }
 
 
-
-
-//considering lidar sensor as the origin
+typedef struct {
+    double x;
+    double y;
+} Point;
 
 struct Line {
     float a_dash, b_dash, c_dash; // ax + by + c = 0
     std::vector<int> inliers;
 };
 
-Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
+Line* ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
     int best_inliers = 0;
     Line best_line = {0, 0, 0, {}};
-    size_t N = x.size();  // number of points
+    size_t N = points.size();  // number of points
 
     for (int i = 0; i < iterations; ++i) {
         int i1, i2;
-        do { i1 = rand() % N; } while (used[i1]);
-        do { i2 = rand() % N; } while (i2 == i1 || used[i2]);
+        int count = 0;
+        do {
+            i1 = rand() % N;
+            count++;
+            if (count > points.size() / 2)
+                return nullptr;
+        } while (used[i1]);
+        count = 0;
+        do { i2 = rand() % N;
+            count++;
+            if (count > points.size() / 2)
+                return nullptr;
+        } while (i2 == i1 || used[i2]);
 
-        float x1 = x[i1], y1 = y[i1], x2 = x[i2], y2 = y[i2];  // two random points
+        float x1 = points[i1].x, y1 = points[i1].y, x2 = points[i2].x, y2 = points[i2].y;  // two random points
         //calculate line parameters
         float a = y1 - y2;
         float b = x2 - x1;
@@ -102,12 +114,12 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
 
         if (norm == 0) continue;
 
-        int count = 0;
+        count = 0;
         std::vector<int> current_inliers;
         // count inliers
         for (int j = 0; j < N; ++j) {
             if (used[j]) continue;
-            float dist = fabs(a * x[j] + b * y[j] + c) / norm;
+            float dist = fabs(a * points[j].x + b * points[j].y + c) / norm;
             if (dist < threshold) {
                 count++;
                 current_inliers.push_back(j);
@@ -121,33 +133,16 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
     }
 
     for (int idx : best_line.inliers) used[idx] = true;   // mark inliers found as used
-    return best_line;
+    return *best_line;
 }
 
-void publishLineMarker(const Line& line, const std::vector<float>& x, const std::vector<float>& y, int id) {
-    visualization_msgs::Marker marker;
-    marker.header.frame_id = "laser";
-    marker.header.stamp = ros::Time::now();
-    marker.ns = "lines";
-    marker.id = id;
-    marker.type = visualization_msgs::Marker::LINE_STRIP;
-    marker.action = visualization_msgs::Marker::ADD;
-    marker.scale.x = 0.02;
-    marker.color.r = 1.0;
-    marker.color.a = 1.0;
+const double fov_deg = 240.0;
+const double R     = 0.17;
+const double dL    = 0.16;
 
-    geometry_msgs::Point p1, p2;
-    for (int idx : line.inliers) {
-        if (p1.x == 0 && p1.y == 0) {
-            p1.x = x[idx]; p1.y = y[idx];
-        } else {
-            p2.x = x[idx]; p2.y = y[idx];
-        }
-    }
-    marker.points.push_back(p1);
-    marker.points.push_back(p2);
-    marker_pub.publish(marker);
-}
+
+
+std::vector<Point> obstaclePoints;
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
@@ -156,32 +151,37 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     min_distance = std::numeric_limits<float>::infinity();
     min_index = -1;
 
-    std::vector<float> x, y;
     //convert lidar polar coordinates to cartesian
-    for (size_t i = 0; i < msg->ranges.size(); ++i) {
+    for (int i = 0; i < msg->ranges.size(); ++i) {
         float r = msg->ranges[i];
         if (!isnan(r) && r >= msg->range_min && r <= msg->range_max) {
-            float angle = msg->angle_min + i * msg->angle_increment;
-            x.push_back(r * cos(angle));
-            y.push_back(r * sin(angle));
+            double theta = msg->angle_min + i * msg->angle_increment;
+            double sin_t = sin(theta);
+            double cos_t = cos(theta);
+
+            obstaclePoints[i].x = dL + r * cos_t;
+            obstaclePoints[i].y = r * sin_t;
+
             // Check if the value is less than the current minimum distance
             if (r < min_distance) {
                 min_distance = r;
                 min_index = i;
             }
+        } else {
+            obstaclePoints[i].x = std::numeric_limits<double>::infinity();
+            obstaclePoints[i].y = std::numeric_limits<double>::infinity();
         }
     }
 
-    std::vector<bool> used(x.size(), false);   // to track used points
+    std::vector<bool> used(obstaclePoints.size(), false);   // to track used points
     std::vector<Line> lines; // to store detected lines by RANSAC
     int line_id = 0;
 
     while (true) {
         // RANSAC to find lines
-        Line line = ransacLineFit(x, y, used);
-        if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
-        lines.push_back(line);
-        publishLineMarker(line, x, y, line_id++);
+        Line* line = ransacLineFit(obstaclePoints, used);
+        if (line == nullptr || line->inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
+        lines.push_back(*line);
     }
 
     ROS_INFO("Found %zu lines", lines.size());
@@ -191,7 +191,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     // Find the pair of perpendicular lines closest to the LiDAR (origin)
     std::vector<Line> perpendicular_lines;
     float min_total_distance = std::numeric_limits<float>::max();
-
+    Point intersectionPoint;
     for (size_t i = 0; i < lines.size(); ++i) {
         for (size_t j = i + 1; j < lines.size(); ++j) {
 
@@ -207,9 +207,11 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                 float y = a * x + c;
 
                 float distance = sqrt(x * x + y * y);
-                if (distance < min_total_distance) {
+                if (distance < min_total_distance && distance < 0.80) {
                     min_total_distance = distance;
                     perpendicular_lines.clear();
+                    intersectionPoint.x = x;
+                    intersectionPoint.y = y;
                     perpendicular_lines.push_back(lines[i]);
                     perpendicular_lines.push_back(lines[j]);
                 }
@@ -217,36 +219,24 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         }
     }
 
-    /*bool found_perpendicular = !perpendicular_lines.empty();
 
-    if (found_perpendicular) {
+    if (!perpendicular_lines.empty()) {
         // Calculate distances and angles
-        float distance1 = fabs(perpendicular_lines[0].c_dash);
-        float distance2 = fabs(perpendicular_lines[1].c_dash);
-        float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
+        float x = (intersectionPoint.x > 0.4 ? intersectionPoint.x - 0.4 : intersectionPoint.x + 0.4);
+        float y = (intersectionPoint.y > 0.4 ? intersectionPoint.y - 0.4 : intersectionPoint.y + 0.4);
 
-        // Adjust distances to center
-        float center_distance1 = distance1 + 0.12 * cos(angle);
-        float center_distance2 = distance2 - 0.12 * sin(angle);
-
+        float angle = atan2(intersectionPoint.x - 0.4, (intersectionPoint.y - 0.4));
+        float distance = sqrt(x * x + y * y);
         // Align with the first line
         spinInPlace(*diff_drive_client, angle, 3.0);
-        moveLinear(*diff_drive_client, center_distance1 - 0.4, 3.0);
-
-        // Determine turn direction and align with the second line
-        float turn_angle = (perpendicular_lines[0].a_dash * perpendicular_lines[1].b_dash - 
-                            perpendicular_lines[0].b_dash * perpendicular_lines[1].a_dash) > 0 ? -M_PI_2 : M_PI_2;
-        spinInPlace(*diff_drive_client, turn_angle, 3.0);
-
-        // Move to the center of the cell
-        moveLinear(*diff_drive_client, center_distance2 - 0.4, 3.0);
+        moveLinear(*diff_drive_client, -distance - 0.4, 3.0);
 
         processing_done = true;  // Mark that we're done
         ros::shutdown();         // Exit the node cleanly
     }
     else {
         spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees if no lines found
-    }*/
+    }
 }
 
 int main(int argc, char** argv) {
@@ -257,7 +247,7 @@ int main(int argc, char** argv) {
     ros::ServiceClient client = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     diff_drive_client = &client;
 
-    marker_pub = n.advertise<visualization_msgs::Marker>("/lines", 10);
+    //marker_pub = n.advertise<visualization_msgs::Marker>("/lines", 10);
 
      // Keep spinning until we're done
     ros::Rate rate(10); // 10 Hz loop

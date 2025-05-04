@@ -16,7 +16,7 @@
 #include <cmath>
 
 double radius = 0.0325; // radius of the wheel in meters
-double error_factor = 1/0.81; // error factor
+double error_factor = 1/0.80; // error factor
 double ticksPerRevolution = 5.0 * error_factor; // ticks per revolution
 double angle_error_factor = 1/0.96; // error factor
 //double ticksPerRevolutionRot = 7.035; // ticks per revolution
@@ -151,11 +151,11 @@ int main(int argc, char **argv)
   double speed = 3.0;
 
 
-  for (int i = 0; i < 1; i++) {
+  for (int i = 0; i < 20; i++) {
         translate(1.0, speed);
         ros::Duration(1.0).sleep();
-        //rotate(M_PI / 2, speed);
-        //ros::Duration(1.0).sleep();
+        rotate(M_PI / 2, speed);
+        ros::Duration(1.0).sleep();
   }
 
   return 0;
