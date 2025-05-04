@@ -104,7 +104,10 @@ target_link_libraries(square_with_encoders_pid ${catkin_LIBRARIES})
 add_dependencies(square_with_encoders_pid create_fundamentals_generate_messages_cpp)
 
 
-add_executable(align src/square_with_encoders_controller.cpp)
+add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
 
+add_executable(align2 src/align2.cpp)
+target_link_libraries(align2 ${catkin_LIBRARIES})
+add_dependencies(align2 create_fundamentals_generate_messages_cpp)
