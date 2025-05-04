@@ -265,6 +265,11 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         // Calculate distances and angles
         float distance1 = fabs(perpendicular_lines[0].c_dash);
         float distance2 = fabs(perpendicular_lines[1].c_dash);
+        if(distance1 >= 0.8 || distance2 >= 0.8) {
+            ROS_INFO("Distance to wall is too far, rotating 180 degrees");
+            spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees
+            return;
+        }
         float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
 
         // Adjust distances to center
@@ -273,6 +278,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         // Align with the first line
         spinInPlace(*diff_drive_client, angle, 3.0);
+
+        ros::Duration(0.5).sleep(); // Wait for a moment
         moveLinear(*diff_drive_client, center_distance1 - 0.4, 3.0);
 
         // Determine turn direction and align with the second line
@@ -280,7 +287,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                             perpendicular_lines[0].b_dash * perpendicular_lines[1].a_dash) > 0 ? -M_PI_2 : M_PI_2;
         spinInPlace(*diff_drive_client, turn_angle, 3.0);
 
-        
+        ros::Duration(0.5).sleep(); // Wait for a moment
 
         // Move to the center of the cell
         moveLinear(*diff_drive_client, -(center_distance2 - 0.4), 3.0);
