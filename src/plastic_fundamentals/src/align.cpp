@@ -73,6 +73,11 @@ void moveLinear(ros::ServiceClient& diffDrive,
         ROS_ERROR("Failed to send stop command!");
 }
 
+struct Line {
+    float a_dash, b_dash, c_dash; // ax + by + c = 0
+    std::vector<int> inliers;
+};
+
 
 void correctNormalDirection(Line& line, const std::vector<float>& x, const std::vector<float>& y) {
     // Calculate centroid of inliers
@@ -103,10 +108,6 @@ void correctNormalDirection(Line& line, const std::vector<float>& x, const std::
 
 //considering lidar sensor as the origin
 
-struct Line {
-    float a_dash, b_dash, c_dash; // ax + by + c = 0
-    std::vector<int> inliers;
-};
 
 Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
     ROS_INFO("currently in ransac");
