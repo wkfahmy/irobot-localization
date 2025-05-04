@@ -16,10 +16,11 @@ const float DISTANCE_FROM_LIDAR = 0.28; // distance from the lidar to the wall
 constexpr double WHEEL_RADIUS_M   = 0.0325;   // 6.5 cm / 2
 constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
 int callback_count = 0; // Counter for the number of callbacks
-int rotation_180 = 0; // Counter for the number of 180-degree rotations
 
 bool processing_done = false; // Flag to indicate if processing is done
 
+float min_distance;
+int min_index;
 int start_index;
 int end_index;
 
@@ -197,11 +198,14 @@ void publishLineMarker(const Line& line, const std::vector<float>& x, const std:
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     callback_count++;
+    ros::Duration(0.5).sleep(); // Wait for a moment
 
     if (processing_done) return;  // Ignore further callbacks
 
     ROS_INFO("Processing scan data...");
 
+    min_distance = std::numeric_limits<float>::infinity();
+    min_index = -1;
 
     std::vector<float> x, y;
     //convert lidar polar coordinates to cartesian
@@ -211,8 +215,14 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             float angle = msg->angle_min + i * msg->angle_increment;
             x.push_back(r * cos(angle));
             y.push_back(r * sin(angle));
+            // Check if the value is less than the current minimum distance
+            if (r < min_distance) {
+                min_distance = r;
+                min_index = i;
+            }
         }
     }
+    ROS_INFO("found min distance %f at index %d", min_distance, min_index);
 
 
     std::vector<bool> used(x.size(), false);   // to track used points
@@ -237,7 +247,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     for (size_t i = 0; i < lines.size(); ++i) {
         for (size_t j = i + 1; j < lines.size(); ++j) {
             float dot = lines[i].a_dash * lines[j].a_dash + lines[i].b_dash * lines[j].b_dash;
-            if (fabs(dot) < 0.2) { // approx. perpendicular
+            if (fabs(dot) < 0.3) { // approx. perpendicular
 
                 float distance1 = fabs(lines[i].c_dash);  // distance from origin to line 1
                 float distance2 = fabs(lines[j].c_dash);  // distance from origin to line 2
@@ -259,14 +269,10 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         // Calculate distances and angles
         float distance1 = fabs(perpendicular_lines[0].c_dash);
         float distance2 = fabs(perpendicular_lines[1].c_dash);
-        if(distance1 >= 0.8 || distance2 >= 0.8) {
-            rotation_180++;
-            if (rotation_180 > 1) {
-                processing_done = true;  // Mark that we're done
-                ros::shutdown();         // Exit the node cleanly
-            }
+        if(distance1 > 0.8 || distance2 > 0.8) {
             ROS_INFO("Distance to wall is too far, rotating 180 degrees");
             spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees
+            ros::Duration(0.5).sleep(); // Wait for a moment
             return;
         }
         float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
@@ -296,12 +302,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         }
     }
     else {
-        rotation_180++;
-        if (rotation_180 > 1) {
-            processing_done = true;  // Mark that we're done
-            ros::shutdown();         // Exit the node cleanly
-        }
         spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees if no lines found
+        ros::Duration(0.5).sleep(); // Wait for a moment
     }
 }
 
