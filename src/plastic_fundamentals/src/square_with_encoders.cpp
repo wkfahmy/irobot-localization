@@ -20,7 +20,7 @@ double error_factor = 1/0.81; // error factor
 double ticksPerRevolution = 5.0 * error_factor; // ticks per revolution
 double angle_error_factor = 1/0.96; // error factor
 //double ticksPerRevolutionRot = 7.035; // ticks per revolution
-double ticksPerRevolutionRot = 5.7; // ticks per revolution
+double ticksPerRevolutionRot = 5.5; // ticks per revolution
 double track_width  = 0.263;
 
 bool translating = false;
@@ -101,6 +101,8 @@ void translate(double distance, double speed) {
     srv.request.right = side * speed;
 
     double correction = 0.0;
+    ros::Rate rate(10);  // 20 Hz control loop
+    ros::spinOnce();
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
 
         if (rightTicks != 0.0) {
@@ -150,10 +152,10 @@ int main(int argc, char **argv)
 
 
   for (int i = 0; i < 1; i++) {
-        //translate(1.0, speed * 2);
-        //ros::Duration(1.0).sleep();
-        rotate(M_PI * 2, speed);
+        translate(1.0, speed);
         ros::Duration(1.0).sleep();
+        //rotate(M_PI / 2, speed);
+        //ros::Duration(1.0).sleep();
   }
 
   return 0;
