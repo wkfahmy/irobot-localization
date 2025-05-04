@@ -84,6 +84,7 @@ struct Line {
 };
 
 Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
+    ROS_INFO("currently in ransac");
     int best_inliers = 0;
     Line best_line = {0, 0, 0, {}};
     size_t N = x.size();  // number of points
@@ -121,6 +122,7 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
     }
 
     for (int idx : best_line.inliers) used[idx] = true;   // mark inliers found as used
+    ROS_INFO("found a line");
     return best_line;
 }
 
@@ -153,6 +155,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (processing_done) return;  // Ignore further callbacks
 
+    ROS_INFO("Processing scan data...");
+
     min_distance = std::numeric_limits<float>::infinity();
     min_index = -1;
 
@@ -171,17 +175,21 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             }
         }
     }
+    ROS_INFO("found min distance %f at index %d", min_distance, min_index);
+
 
     std::vector<bool> used(x.size(), false);   // to track used points
     std::vector<Line> lines; // to store detected lines by RANSAC
     int line_id = 0;
 
-    while (true) {
+    int counter = 0;
+    while (counter <  3) {
         // RANSAC to find lines
         Line line = ransacLineFit(x, y, used);
         if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
         lines.push_back(line);
         publishLineMarker(line, x, y, line_id++);
+        counter++;
     }
 
     if (lines.empty()) return; // no lines found
@@ -218,8 +226,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
 
         // Adjust distances to center
-        float center_distance1 = distance1 + 0.12 * cos(angle);
-        float center_distance2 = distance2 - 0.12 * sin(angle);
+        float center_distance1 = distance1 + 0.16 * cos(angle);
+        float center_distance2 = distance2 - 0.16 * sin(angle);
 
         // Align with the first line
         spinInPlace(*diff_drive_client, angle, 3.0);
@@ -244,6 +252,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 int main(int argc, char** argv) {
     ros::init(argc, argv, "align_node");
     ros::NodeHandle n;
+    ROS_INFO("Align node started");
 
     ros::Subscriber sub = n.subscribe("scan_filtered", 1, scanCallback);
     ros::ServiceClient client = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
