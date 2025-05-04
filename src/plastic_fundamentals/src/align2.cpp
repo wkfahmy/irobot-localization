@@ -75,20 +75,31 @@ void moveLinear(ros::ServiceClient& diffDrive,
 }
 
 
+
+std::vector<Point> obstaclePoints;
+std::vector<AngularPoint> angledObstaclePoints;
+
 typedef struct {
     double x;
     double y;
 } Point;
+
+typedef struct {
+    double angle;
+    double distance;
+} AngularPoint;
+
+//considering lidar sensor as the origin
 
 struct Line {
     float a_dash, b_dash, c_dash; // ax + by + c = 0
     std::vector<int> inliers;
 };
 
-bool ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, Line& out_line) {
+Line ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
     int best_inliers = 0;
     Line best_line = {0, 0, 0, {}};
-    size_t N = points.size();
+    size_t N = points.size();  // number of points
 
     for (int i = 0; i < 100; ++i) {
         int i1, i2;
@@ -100,15 +111,8 @@ bool ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, Li
                 return false;
         } while (used[i1]);
 
-        count = 0;
-        do {
-            i2 = rand() % N;
-            count++;
-            if (count > points.size() / 2)
-                return false;
-        } while (i2 == i1 || used[i2]);
-
-        float x1 = points[i1].x, y1 = points[i1].y, x2 = points[i2].x, y2 = points[i2].y;
+        float x1 = points[i1].x, y1 = points[i1].y, x2 = points[i2].x, y2 = points[i2].y;  // two random points
+        //calculate line parameters
         float a = y1 - y2;
         float b = x2 - x1;
         float c = x1 * y2 - x2 * y1;
@@ -120,7 +124,7 @@ bool ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, Li
         for (int j = 0; j < N; ++j) {
             if (used[j]) continue;
             float dist = fabs(a * points[j].x + b * points[j].y + c) / norm;
-            if (dist < 0.05) {
+            if (dist < threshold) {
                 count++;
                 current_inliers.push_back(j);
             }
@@ -147,6 +151,10 @@ const double dL    = 0.16;
 
 std::vector<Point> obstaclePoints;
 
+const double fov_deg = 240.0;
+const double R     = 0.17;  // 17 cm robot radius
+const double dL    = 0.12;  // 12 cm lidar offset
+
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (processing_done) return;  // Ignore further callbacks
@@ -158,18 +166,33 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     min_distance = std::numeric_limits<float>::infinity();
     min_index = -1;
 
+    float rays = msg->ranges.size();
+
+    if (obstaclePoints.size() != rays) {
+        obstaclePoints.resize(rays);
+    }
+
+    float step = (fov_deg / rays) * M_PI / 180.0;
+    float start_angle = (-fov_deg / 2.0) * M_PI / 180.0;
+
+    std::vector<float> x, y;
     //convert lidar polar coordinates to cartesian
-    for (int i = 0; i < msg->ranges.size(); ++i) {
-        float r = msg->ranges[i];
-        if (!isnan(r) && r >= msg->range_min && r <= msg->range_max) {
-            double theta = msg->angle_min + i * msg->angle_increment;
+    for (size_t i = 0; i < msg->ranges.size(); ++i) {
+
+
+        float distance = msg->ranges[i];
+        if (!isnan(distance) && distance >= msg->range_min && distance <= msg->range_max) {
+            float angle = msg->angle_min + i * msg->angle_increment;
             double sin_t = sin(theta);
             double cos_t = cos(theta);
 
-            obstaclePoints[i].x = dL + r * cos_t;
-            obstaclePoints[i].y = r * sin_t;
-
             // Check if the value is less than the current minimum distance
+            obstaclePoints[i].x = dL + distance * cos_t;
+            obstaclePoints[i].y = distance * sin_t;
+
+            angledObstaclePoints[i].angle = atan2(obstaclePoints[i].x, obstaclePoints[i].y) - M_PI / 2.0;
+            angledObstaclePoints[i].distance = std::sqrt(pow(obstaclePoints[i].x,2) + pow(obstaclePoints[i].y,2));
+
             if (r < min_distance) {
                 min_distance = r;
                 min_index = i;
@@ -177,6 +200,9 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         } else {
             obstaclePoints[i].x = std::numeric_limits<double>::infinity();
             obstaclePoints[i].y = std::numeric_limits<double>::infinity();
+
+            angledObstaclePoints[i].angle = M_PI;
+            angledObstaclePoints[i].distance = std::numeric_limits<double>::infinity();
         }
     }
 
@@ -186,9 +212,10 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     while (true) {
         // RANSAC to find lines
-        Line line;
-        if (!ransacLineFit(obstaclePoints, used, line) || line.inliers.size() < MIN_INLIERS) break;
+        Line line = ransacLineFit(obstaclePoints, used);
+        if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
         lines.push_back(line);
+        //publishLineMarker(line, x, y, line_id++);
     }
 
     ROS_INFO("Found %zu lines", lines.size());

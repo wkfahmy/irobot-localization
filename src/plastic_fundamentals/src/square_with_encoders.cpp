@@ -76,8 +76,6 @@ void rotate(double angle_rad, double speed) {
             srv.request.right = side * speed * (1 - correction / 2);
         }
         diffDriveClient->call(srv);
-
-        rate.sleep();
         ros::spinOnce();
     }
 
