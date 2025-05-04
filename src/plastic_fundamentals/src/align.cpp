@@ -18,9 +18,6 @@ constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
 int callback_count = 0; // Counter for the number of callbacks
 
 bool processing_done = false; // Flag to indicate if processing is done
-
-float min_distance;
-int min_index;
 int start_index;
 int end_index;
 
@@ -125,7 +122,7 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
 
         // If fewer than 2 points left, break early
         if (unused_indices.size() < 2) {
-            ROS_INFO("Not enough points left for RANSAC");
+            ROS_INFO("Not enough points left for RANSAC, exiting");
             return best_line;
         }
 
@@ -204,9 +201,6 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     ROS_INFO("Processing scan data...");
 
-    min_distance = std::numeric_limits<float>::infinity();
-    min_index = -1;
-
     std::vector<float> x, y;
     //convert lidar polar coordinates to cartesian
     for (size_t i = 0; i < msg->ranges.size(); ++i) {
@@ -215,14 +209,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             float angle = msg->angle_min + i * msg->angle_increment;
             x.push_back(r * cos(angle));
             y.push_back(r * sin(angle));
-            // Check if the value is less than the current minimum distance
-            if (r < min_distance) {
-                min_distance = r;
-                min_index = i;
-            }
         }
     }
-    ROS_INFO("found min distance %f at index %d", min_distance, min_index);
 
 
     std::vector<bool> used(x.size(), false);   // to track used points
