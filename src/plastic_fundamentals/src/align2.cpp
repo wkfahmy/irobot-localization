@@ -5,6 +5,7 @@
 #include <cmath>
 #include <vector>
 #include <cstdlib>
+#include <optional>
 
 ros::ServiceClient* diff_drive_client;
 ros::Publisher marker_pub;
@@ -84,43 +85,42 @@ struct Line {
     std::vector<int> inliers;
 };
 
-Line* ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, float threshold = 0.05, int iterations = 100) {
+bool ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, Line& out_line) {
     int best_inliers = 0;
     Line best_line = {0, 0, 0, {}};
-    size_t N = points.size();  // number of points
+    size_t N = points.size();
 
-    for (int i = 0; i < iterations; ++i) {
+    for (int i = 0; i < 100; ++i) {
         int i1, i2;
         int count = 0;
         do {
             i1 = rand() % N;
             count++;
             if (count > points.size() / 2)
-                return nullptr;
+                return false;
         } while (used[i1]);
+
         count = 0;
-        do { i2 = rand() % N;
+        do {
+            i2 = rand() % N;
             count++;
             if (count > points.size() / 2)
-                return nullptr;
+                return false;
         } while (i2 == i1 || used[i2]);
 
-        float x1 = points[i1].x, y1 = points[i1].y, x2 = points[i2].x, y2 = points[i2].y;  // two random points
-        //calculate line parameters
+        float x1 = points[i1].x, y1 = points[i1].y, x2 = points[i2].x, y2 = points[i2].y;
         float a = y1 - y2;
         float b = x2 - x1;
         float c = x1 * y2 - x2 * y1;
         float norm = sqrt(a * a + b * b);
-
         if (norm == 0) continue;
 
         count = 0;
         std::vector<int> current_inliers;
-        // count inliers
         for (int j = 0; j < N; ++j) {
             if (used[j]) continue;
             float dist = fabs(a * points[j].x + b * points[j].y + c) / norm;
-            if (dist < threshold) {
+            if (dist < 0.05) {
                 count++;
                 current_inliers.push_back(j);
             }
@@ -132,8 +132,11 @@ Line* ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, f
         }
     }
 
-    for (int idx : best_line.inliers) used[idx] = true;   // mark inliers found as used
-    return *best_line;
+    if (best_inliers == 0) return false;
+
+    for (int idx : best_line.inliers) used[idx] = true;
+    out_line = best_line;
+    return true;
 }
 
 const double fov_deg = 240.0;
@@ -147,6 +150,10 @@ std::vector<Point> obstaclePoints;
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (processing_done) return;  // Ignore further callbacks
+
+    if (obstaclePoints.size() != msg->ranges.size()) {
+        obstaclePoints.resize(msg->ranges.size());
+    }
 
     min_distance = std::numeric_limits<float>::infinity();
     min_index = -1;
@@ -179,9 +186,9 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     while (true) {
         // RANSAC to find lines
-        Line* line = ransacLineFit(obstaclePoints, used);
-        if (line == nullptr || line->inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
-        lines.push_back(*line);
+        Line line;
+        if (!ransacLineFit(obstaclePoints, used, line) || line.inliers.size() < MIN_INLIERS) break;
+        lines.push_back(line);
     }
 
     ROS_INFO("Found %zu lines", lines.size());
@@ -222,14 +229,15 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (!perpendicular_lines.empty()) {
         // Calculate distances and angles
-        float x = (intersectionPoint.x > 0.4 ? intersectionPoint.x - 0.4 : intersectionPoint.x + 0.4);
-        float y = (intersectionPoint.y > 0.4 ? intersectionPoint.y - 0.4 : intersectionPoint.y + 0.4);
+        float x = (intersectionPoint.x > 0.0 ? intersectionPoint.x - 0.4 : intersectionPoint.x + 0.4);
+        float y = (intersectionPoint.y > 0.0 ? intersectionPoint.y - 0.4 : intersectionPoint.x + 0.4);
 
-        float angle = atan2(intersectionPoint.x - 0.4, (intersectionPoint.y - 0.4));
+        float angle = atan2(y, x);
         float distance = sqrt(x * x + y * y);
         // Align with the first line
         spinInPlace(*diff_drive_client, angle, 3.0);
-        moveLinear(*diff_drive_client, -distance - 0.4, 3.0);
+        ros::Duration(0.5).sleep();
+        moveLinear(*diff_drive_client, distance, 3.0);
 
         processing_done = true;  // Mark that we're done
         ros::shutdown();         // Exit the node cleanly
