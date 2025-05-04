@@ -174,8 +174,7 @@ void publishLineMarker(const Line& line, const std::vector<float>& x, const std:
     visualization_msgs::Marker marker;
     marker.header.frame_id = "laser";
     marker.header.stamp = ros::Time::now();
-    marke
-    r.ns = "lines";
+    marker.ns = "lines";
     marker.id = id;
     marker.type = visualization_msgs::Marker::LINE_STRIP;
     marker.action = visualization_msgs::Marker::ADD;
