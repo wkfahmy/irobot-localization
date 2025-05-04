@@ -74,6 +74,31 @@ void moveLinear(ros::ServiceClient& diffDrive,
 }
 
 
+void correctNormalDirection(Line& line, const std::vector<float>& x, const std::vector<float>& y) {
+    // Calculate centroid of inliers
+    float cx = 0.0, cy = 0.0;
+    for (int idx : line.inliers) {
+        cx += x[idx];
+        cy += y[idx];
+    }
+    cx /= line.inliers.size();
+    cy /= line.inliers.size();
+
+    // Vector from centroid to origin (LiDAR position)
+    float vec_to_origin_x = -cx;
+    float vec_to_origin_y = -cy;
+
+    // Dot product between normal and centroid-to-origin vector
+    float dot = line.a_dash * vec_to_origin_x + line.b_dash * vec_to_origin_y;
+
+    // If dot product is positive, normal points TOWARD origin (flip it)
+    if (dot > 0) {
+        line.a_dash *= -1;
+        line.b_dash *= -1;
+        line.c_dash *= -1;
+    }
+}
+
 
 
 //considering lidar sensor as the origin
@@ -90,12 +115,28 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
     size_t N = x.size();  // number of points
 
     for (int i = 0; i < iterations; ++i) {
-        int i1, i2;
-        do { i1 = rand() % N; } while (used[i1]);
-        do { i2 = rand() % N; } while (i2 == i1 || used[i2]);
+        // Collect unused indices
+        std::vector<int> unused_indices;
+        for (size_t j = 0; j < N; ++j) {
+            if (!used[j]) unused_indices.push_back(j);
+        }
+
+        // If fewer than 2 points left, break early
+        if (unused_indices.size() < 2) {
+            ROS_INFO("Not enough points left for RANSAC");
+            return best_line;
+        }
+
+        // Randomly pick two different unused indices
+        int i1_idx = rand() % unused_indices.size();
+        int i1 = unused_indices[i1_idx];
+        int i2;
+        do {
+            i2 = unused_indices[rand() % unused_indices.size()];
+        } while (i2 == i1);
 
         float x1 = x[i1], y1 = y[i1], x2 = x[i2], y2 = y[i2];  // two random points
-        //calculate line parameters
+        // Calculate line parameters
         float a = y1 - y2;
         float b = x2 - x1;
         float c = x1 * y2 - x2 * y1;
@@ -105,8 +146,9 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
 
         int count = 0;
         std::vector<int> current_inliers;
-        // count inliers
-        for (int j = 0; j < N; ++j) {
+
+        // Count inliers
+        for (size_t j = 0; j < N; ++j) {
             if (used[j]) continue;
             float dist = fabs(a * x[j] + b * y[j] + c) / norm;
             if (dist < threshold) {
@@ -182,14 +224,13 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     std::vector<Line> lines; // to store detected lines by RANSAC
     int line_id = 0;
 
-    int counter = 0;
-    while (counter <  3) {
+    while (true) {
         // RANSAC to find lines
         Line line = ransacLineFit(x, y, used);
         if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
+        correctNormalDirection(line, x, y); // Correct the normal direction
         lines.push_back(line);
         publishLineMarker(line, x, y, line_id++);
-        counter++;
     }
 
     if (lines.empty()) return; // no lines found
@@ -201,7 +242,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     for (size_t i = 0; i < lines.size(); ++i) {
         for (size_t j = i + 1; j < lines.size(); ++j) {
             float dot = lines[i].a_dash * lines[j].a_dash + lines[i].b_dash * lines[j].b_dash;
-            if (fabs(dot) < 0.1) { // approx. perpendicular
+            if (fabs(dot) < 0.2) { // approx. perpendicular
 
                 float distance1 = fabs(lines[i].c_dash);  // distance from origin to line 1
                 float distance2 = fabs(lines[j].c_dash);  // distance from origin to line 2
