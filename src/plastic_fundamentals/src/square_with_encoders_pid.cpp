@@ -16,7 +16,7 @@ double rotation_error_factor = 1/0.96;     // 96% of target rotation achieved
 // Encoder
 double base_ticks_per_rev = 5.0;          // Measured ticks/revolution
 double ticksPerRevolution = base_ticks_per_rev * translation_error_factor;
-double ticksPerRevolutionRot = 8.36;//base_ticks_per_rev * rotation_error_factor;
+double ticksPerRevolutionRot = 8.5;//base_ticks_per_rev * rotation_error_factor;
 
 // PID parameters
 double Kp_trans = 0.8, Ki_trans = 0.05, Kd_trans = 0.2;
@@ -170,7 +170,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 4; i++) {
         //translate(1.0, speed);
         //ros::Duration(1.0).sleep();
-        rotate(2 * M_PI, speed);
+        rotate(M_PI / 2, speed);
         ros::Duration(1.0).sleep();
     }
 

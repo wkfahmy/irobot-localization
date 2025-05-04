@@ -66,6 +66,7 @@ void rotate(double angle_rad, double speed) {
     srv.request.right = side * speed;
 
     double correction = 0.0;
+    ros::Rate rate(10);  // 20 Hz control loop
     ros::spinOnce();
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
 
@@ -75,15 +76,8 @@ void rotate(double angle_rad, double speed) {
             srv.request.right = side * speed * (1 - correction / 2);
         }
         diffDriveClient->call(srv);
-        ros::spinOnce();
-    }
 
-    while (abs(leftTicks - ticks) >  0.1 || abs(rightTicks - ticks) >  0.1) {
-        double offset = std::max(abs(leftTicks - ticks), abs(rightTicks - ticks));
-        srv.request.left = offset * side;
-        srv.request.right = -offset * side;
-        diffDriveClient->call(srv);
-
+        rate.sleep();
         ros::spinOnce();
     }
 
@@ -108,7 +102,6 @@ void translate(double distance, double speed) {
 
     double correction = 0.0;
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
-        ros::spinOnce();
 
         if (rightTicks != 0.0) {
             correction = 1 - abs(leftTicks) / abs(rightTicks);
@@ -116,6 +109,9 @@ void translate(double distance, double speed) {
             srv.request.right = side * speed * (1 - correction / 2);
         }
         diffDriveClient->call(srv);
+
+        rate.sleep();
+        ros::spinOnce();
     }
 
     srv.request.left = 0;
@@ -150,13 +146,13 @@ int main(int argc, char **argv)
   ros::ServiceClient resetEncoders = n.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
   resetEncodersClient = &resetEncoders;
 
-  double speed = 6.0;
+  double speed = 3.0;
 
 
-  for (int i = 0; i < 20; i++) {
+  for (int i = 0; i < 1; i++) {
         //translate(1.0, speed * 2);
         //ros::Duration(1.0).sleep();
-        rotate(M_PI / 2, speed);
+        rotate(M_PI * 2, speed);
         ros::Duration(1.0).sleep();
   }
 
