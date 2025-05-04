@@ -15,6 +15,7 @@ const float DISTANCE_THRESHOLD = 0.05; // distance threshold for inliers
 const float DISTANCE_FROM_LIDAR = 0.28; // distance from the lidar to the wall
 constexpr double WHEEL_RADIUS_M   = 0.0325;   // 6.5 cm / 2
 constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
+int callback_count = 0; // Counter for the number of callbacks
 
 bool processing_done = false; // Flag to indicate if processing is done
 
@@ -173,7 +174,8 @@ void publishLineMarker(const Line& line, const std::vector<float>& x, const std:
     visualization_msgs::Marker marker;
     marker.header.frame_id = "laser";
     marker.header.stamp = ros::Time::now();
-    marker.ns = "lines";
+    marke
+    r.ns = "lines";
     marker.id = id;
     marker.type = visualization_msgs::Marker::LINE_STRIP;
     marker.action = visualization_msgs::Marker::ADD;
@@ -195,6 +197,8 @@ void publishLineMarker(const Line& line, const std::vector<float>& x, const std:
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
+
+    callback_count++;
 
     if (processing_done) return;  // Ignore further callbacks
 
@@ -291,9 +295,10 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         // Move to the center of the cell
         moveLinear(*diff_drive_client, -(center_distance2 - 0.4), 3.0);
-
-        processing_done = true;  // Mark that we're done
-        ros::shutdown();         // Exit the node cleanly
+        if(callback_count > 2) {
+            processing_done = true;  // Mark that we're done
+            ros::shutdown();         // Exit the node cleanly
+        }
     }
     else {
         spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees if no lines found
