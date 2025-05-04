@@ -15,22 +15,13 @@
 #include "create_fundamentals/ResetEncoders.h"
 #include <cmath>
 
-double radius = 0.0325; // radius of the wheel in meters
-double error_factor = 1/0.80; // error factor
-double ticksPerRevolution = 5.0 * error_factor; // ticks per revolution
-double angle_error_factor = 1/0.96; // error factor
-//double ticksPerRevolutionRot = 7.035; // ticks per revolution
-double ticksPerRevolutionRot = 5.5; // ticks per revolution
+double radius = 0.0325;
+double ticksPerRevolution = 6.25;
+double ticksPerRevolutionRot = 5.5;
 double track_width  = 0.263;
-
-bool translating = false;
-bool rotating = false;
 
 double leftTicks = 0;
 double rightTicks = 0;
-
-double currentLeftTicks = 0;
-
 
 ros::ServiceClient* diffDriveClient;
 create_fundamentals::DiffDrive srv;
@@ -51,7 +42,7 @@ double getTranslationTicks(double distance) {
 }
 
 double getRotationTicks(double angle_rad) {
-  return ticksPerRevolutionRot * angle_rad * track_width / (4 * M_PI * radius);
+    return ticksPerRevolutionRot * angle_rad * track_width / (4 * M_PI * radius);
 }
 
 void rotate(double angle_rad, double speed) {
@@ -66,8 +57,10 @@ void rotate(double angle_rad, double speed) {
     srv.request.right = side * speed;
 
     double correction = 0.0;
-    ros::Rate rate(10);  // 20 Hz control loop
+    ros::Rate rate(10);  // 10 Hz control loop
     ros::spinOnce();
+
+    // Continue rotating until the average of the ticks is greater than the target ticks
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
 
         if (rightTicks != 0.0) {
@@ -99,8 +92,10 @@ void translate(double distance, double speed) {
     srv.request.right = side * speed;
 
     double correction = 0.0;
-    ros::Rate rate(10);  // 20 Hz control loop
+    ros::Rate rate(10);  // 10 Hz control loop
     ros::spinOnce();
+
+    // Continue moving until the average of the ticks is greater than the target ticks
     while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
 
         if (rightTicks != 0.0) {
@@ -147,7 +142,6 @@ int main(int argc, char **argv)
   resetEncodersClient = &resetEncoders;
 
   double speed = 3.0;
-
 
   for (int i = 0; i < 20; i++) {
         translate(1.0, speed);

@@ -2,7 +2,6 @@
 #include "create_fundamentals/DiffDrive.h"
 #include "create_fundamentals/SensorPacket.h"
 
-// Function to drive the robot forward
 void driveForward(ros::ServiceClient& diffDrive, double speed, double duration_sec) {
     create_fundamentals::DiffDrive srv;
     srv.request.left = speed;
@@ -14,7 +13,6 @@ void driveForward(ros::ServiceClient& diffDrive, double speed, double duration_s
 
     ros::Duration(duration_sec).sleep(); // Move forward for the specified time
 
-    // Stop after moving
     srv.request.left = 0.0;
     srv.request.right = 0.0;
     if (!diffDrive.call(srv)) {
@@ -22,11 +20,10 @@ void driveForward(ros::ServiceClient& diffDrive, double speed, double duration_s
     }
 }
 
-// Function to turn the robot 90 degrees to the left
 void turnLeft(ros::ServiceClient& diffDrive, double speed, double duration_sec) {
     create_fundamentals::DiffDrive srv;
     srv.request.left = -speed;
-    srv.request.right = speed * 1.1;
+    srv.request.right = speed * 1.1; // Correcting for the difference in the real wheel speed
 
     if (!diffDrive.call(srv)) {
         ROS_ERROR("Failed to send turn command!");
@@ -34,7 +31,6 @@ void turnLeft(ros::ServiceClient& diffDrive, double speed, double duration_sec) 
 
     ros::Duration(duration_sec).sleep(); // Rotate for the specified time
 
-    // Stop after turning
     srv.request.left = 0.0;
     srv.request.right = 0.0;
     if (!diffDrive.call(srv)) {
@@ -50,19 +46,19 @@ int main(int argc, char **argv)
     ros::ServiceClient diffDrive = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     ros::service::waitForService("diff_drive");
 
-    double forward_speed = 5.0; // [rad/s] wheel speed for moving forward
-    double turn_speed = 3.0;    // [rad/s] wheel speed for turning
+    double forward_speed = 5.0;
+    double turn_speed = 3.0;
 
-    double drive_duration = 6.773; // [seconds] Time to drive 1 meter (to be tuned!)
-    double turn_duration = 2.06;  // [seconds] Time to rotate 90° (to be tuned!)
+    double drive_duration = 6.773;
+    double turn_duration = 2.06;
 
-    // Do the square: 4 times move + turn
+    // Do the square: 4 * 5 = 20 times move + turn
     for (int i = 0; i < 20; ++i) {
         driveForward(diffDrive, forward_speed, drive_duration);
-        ros::Duration(1.0).sleep(); // Small pause for stability
+        ros::Duration(1.0).sleep();
 
         turnLeft(diffDrive, turn_speed, turn_duration);
-        ros::Duration(1.0).sleep(); // Small pause after turn
+        ros::Duration(1.0).sleep();
     }
 
     ROS_INFO("Finished driving the square!");
