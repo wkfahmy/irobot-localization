@@ -151,9 +151,30 @@ const double dL    = 0.16;
 
 std::vector<Point> obstaclePoints;
 
-const double fov_deg = 240.0;
-const double R     = 0.17;  // 17 cm robot radius
-const double dL    = 0.12;  // 12 cm lidar offset
+void correctNormalDirection(Line& line, const std::vector<float>& x, const std::vector<float>& y) {
+    // Calculate centroid of inliers
+    float cx = 0.0, cy = 0.0;
+    for (int idx : line.inliers) {
+        cx += x[idx];
+        cy += y[idx];
+    }
+    cx /= line.inliers.size();
+    cy /= line.inliers.size();
+
+    // Vector from centroid to origin (LiDAR position)
+    float vec_to_origin_x = -cx;
+    float vec_to_origin_y = -cy;
+
+    // Dot product between normal and centroid-to-origin vector
+    float dot = line.a_dash * vec_to_origin_x + line.b_dash * vec_to_origin_y;
+
+    // If dot product is positive, normal points TOWARD origin (flip it)
+    if (dot > 0) {
+        line.a_dash *= -1;
+        line.b_dash *= -1;
+        line.c_dash *= -1;
+    }
+}
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
@@ -186,6 +207,9 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             double sin_t = sin(theta);
             double cos_t = cos(theta);
 
+            obstaclePoints[i].x = r * cos_t - dL;
+            obstaclePoints[i].y = r * sin_t;
+
             // Check if the value is less than the current minimum distance
             obstaclePoints[i].x = dL + distance * cos_t;
             obstaclePoints[i].y = distance * sin_t;
@@ -212,8 +236,9 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     while (true) {
         // RANSAC to find lines
-        Line line = ransacLineFit(obstaclePoints, used);
-        if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
+        Line line;
+        if (!ransacLineFit(obstaclePoints, used, line) || line.inliers.size() < MIN_INLIERS) break;
+        correctNormalDirection(line, 0.0, 0.0); // Correct the normal direction
         lines.push_back(line);
         //publishLineMarker(line, x, y, line_id++);
     }
@@ -229,48 +254,82 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     for (size_t i = 0; i < lines.size(); ++i) {
         for (size_t j = i + 1; j < lines.size(); ++j) {
 
-            float dot = lines[i].a_dash * lines[j].a_dash + lines[i].b_dash * lines[j].b_dash;
-            if (fabs(dot) < 0.1) { // approx. perpendicular
+ 				float A1 = lines[i].a_dash;
+				float B1 = lines[i].b_dash;
+				float C1 = lines[i].c_dash;
+				float A2 = lines[j].a_dash;
+				float B2 = lines[j].b_dash;
+				float C2 = lines[j].c_dash;
+
+				float dot = A1 * A2 + B1 * B2;
+				if (fabs(dot) > 0.2) continue;
+
+				float det = A1 * B2 - A2 * B1;
+				if (fabs(det) > 1e-6) {
                 ROS_INFO("Found perpendicular lines");
-                float a = - lines[i].a_dash / lines[i].b_dash;
-                float c = - lines[i].c_dash / lines[i].b_dash;
-                float b = - lines[j].a_dash / lines[j].b_dash;
-                float d = - lines[j].c_dash / lines[j].b_dash;
+    				float x = (B1 * C2 - B2 * C1) / det;
+    				float y = (A2 * C1 - A1 * C2) / det;
+					float distance = std::sqrt(x * x + y * y);
 
-                float x = (d - c) / (a - b);
-                float y = a * x + c;
-
-                float distance = sqrt(x * x + y * y);
-                if (distance < min_total_distance && distance < 0.80) {
-                    min_total_distance = distance;
-                    perpendicular_lines.clear();
-                    intersectionPoint.x = x;
-                    intersectionPoint.y = y;
-                    perpendicular_lines.push_back(lines[i]);
-                    perpendicular_lines.push_back(lines[j]);
-                }
+					if (min_total_distance > distance) {
+                    	perpendicular_lines.clear();
+						min_total_distance = distance;
+                    	intersectionPoint.x = x;
+                    	intersectionPoint.y = y;
+                    	perpendicular_lines.push_back(lines[i]);
+                    	perpendicular_lines.push_back(lines[j]);
+                	}
             }
         }
     }
 
 
     if (!perpendicular_lines.empty()) {
+		ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
+ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
+          intersectionPoint.x,
+          intersectionPoint.y,
+          sqrt(intersectionPoint.x * intersectionPoint.x + intersectionPoint.y * intersectionPoint.y));
+		float half_cell = 0.2;
+
+		float n1_x = -perpendicular_lines[0].a_dash;
+		float n1_y = -perpendicular_lines[0].b_dash;
+		float n2_x = -perpendicular_lines[1].a_dash;
+		float n2_y = -perpendicular_lines[1].b_dash;
+
+		float dir_x = n1_x + n2_x;
+		float dir_y = n1_y + n2_y;
+		float norm = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+
+		dir_x /= norm;
+		dir_y /= norm;
+
+		float corner_x = intersectionPoint.x;  // convert to robot frame
+		float corner_y = intersectionPoint.y;
+
+		float center_x = corner_x + half_cell * dir_x;
+		float center_y = corner_y + half_cell * dir_y;
+
+        float angle = atan2(center_y, center_x);
+
+		spinInPlace(*diff_drive_client, angle, 3.0);
+        /*ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
         // Calculate distances and angles
         float x = (intersectionPoint.x > 0.0 ? intersectionPoint.x - 0.4 : intersectionPoint.x + 0.4);
-        float y = (intersectionPoint.y > 0.0 ? intersectionPoint.y - 0.4 : intersectionPoint.x + 0.4);
+        float y = (intersectionPoint.y > 0.0 ? intersectionPoint.y - 0.4 : intersectionPoint.y + 0.4);
 
         float angle = atan2(y, x);
-        float distance = sqrt(x * x + y * y);
+        //float distance = sqrt(x * x + y * y);
         // Align with the first line
-        spinInPlace(*diff_drive_client, angle, 3.0);
-        ros::Duration(0.5).sleep();
+        spinInPlace(*diff_drive_client, -angle , 3.0);
+        /*ros::Duration(0.5).sleep();
         moveLinear(*diff_drive_client, distance, 3.0);
 
-        processing_done = true;  // Mark that we're done
+        processing_done = true;  // Mark that we're done*/
         ros::shutdown();         // Exit the node cleanly
     }
     else {
-        spinInPlace(*diff_drive_client, M_PI, 3.0); // Turn 180 degrees if no lines found
+        spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
     }
 }
 
