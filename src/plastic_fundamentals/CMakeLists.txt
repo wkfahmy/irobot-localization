@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(plastic_fundamentals)
 # Load catkin and all dependencies required for this package
-find_package(catkin REQUIRED COMPONENTS roscpp rospy sensor_msgs create_fundamentals)
+find_package(catkin REQUIRED COMPONENTS roscpp rospy sensor_msgs create_fundamentals message_generation)
 
 # include_directories(include ${Boost_INCLUDE_DIR} ${catkin_INCLUDE_DIRS})
 # CATKIN_MIGRATION: removed during catkin migration
@@ -33,8 +33,9 @@ set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 #add_message_files(FILES
 #)
 #uncomment if you have defined services
-#add_service_files(FILES
-#)
+add_service_files(FILES
+    ExecutePlan.srv
+)
 
 #common commands for building c++ executables and libraries
 #add_library(${PROJECT_NAME} src/example.cpp)
@@ -51,14 +52,14 @@ set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 #target_link_libraries(example ${PROJECT_NAME})
 
 ## Generate added messages and services with any dependencies listed here
-#generate_messages(
-#    DEPENDENCIES std_msgs create_fundamentals
-#)
+generate_messages(
+    DEPENDENCIES std_msgs create_fundamentals
+)
 
 # catkin_package parameters: http://ros.org/doc/groovy/api/catkin/html/dev_guide/generated_cmake_api.html#catkin-package
 catkin_package(
     DEPENDS python-serial
-    CATKIN_DEPENDS roscpp rospy sensor_msgs create_fundamentals
+    CATKIN_DEPENDS roscpp rospy sensor_msgs create_fundamentals message_runtime
 )
 
 include_directories(include ${catkin_INCLUDE_DIRS})
@@ -80,3 +81,15 @@ add_dependencies(square_with_encoders create_fundamentals_generate_messages_cpp)
 add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
+
+add_executable(align2 src/align2.cpp)
+target_link_libraries(align2 ${catkin_LIBRARIES})
+add_dependencies(align2 create_fundamentals_generate_messages_cpp)
+
+add_executable(align_improved src/align_improved.cpp)
+target_link_libraries(align_improved ${catkin_LIBRARIES})
+add_dependencies(align_improved create_fundamentals_generate_messages_cpp)
+
+add_executable(execute_plan_server src/execute_plan_server.cpp)
+target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
+add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
