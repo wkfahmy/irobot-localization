@@ -286,7 +286,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (!perpendicular_lines.empty()) {
 		ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
-ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
+		ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
           intersectionPoint.x,
           intersectionPoint.y,
           sqrt(intersectionPoint.x * intersectionPoint.x + intersectionPoint.y * intersectionPoint.y));
@@ -312,7 +312,8 @@ ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
 
         float angle = atan2(center_y, center_x);
 
-		spinInPlace(*diff_drive_client, angle, 3.0);
+		ROS_INFO("Angle: %f", angle);
+		//spinInPlace(*diff_drive_client, angle, 3.0);
         /*ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
         // Calculate distances and angles
         float x = (intersectionPoint.x > 0.0 ? intersectionPoint.x - 0.4 : intersectionPoint.x + 0.4);
@@ -329,7 +330,7 @@ ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
         ros::shutdown();         // Exit the node cleanly
     }
     else {
-        spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
+        //spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
     }
 }
 
