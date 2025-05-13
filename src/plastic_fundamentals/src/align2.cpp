@@ -13,7 +13,6 @@ float wheel_separation = 0.266;
 const int MIN_INLIERS = 30; // minimum inliers to consider a line valid
 const int MAX_ITERATIONS = 100; // maximum iterations for RANSAC
 const float DISTANCE_THRESHOLD = 0.05; // distance threshold for inliers
-const float DISTANCE_FROM_LIDAR = 0.28; // distance from the lidar to the wall
 constexpr double WHEEL_RADIUS_M   = 0.0325;   // 6.5 cm / 2
 constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
 
@@ -151,31 +150,6 @@ const double dL    = 0.16;
 
 std::vector<Point> obstaclePoints;
 
-void correctNormalDirection(Line& line, const std::vector<float>& x, const std::vector<float>& y) {
-    // Calculate centroid of inliers
-    float cx = 0.0, cy = 0.0;
-    for (int idx : line.inliers) {
-        cx += x[idx];
-        cy += y[idx];
-    }
-    cx /= line.inliers.size();
-    cy /= line.inliers.size();
-
-    // Vector from centroid to origin (LiDAR position)
-    float vec_to_origin_x = -cx;
-    float vec_to_origin_y = -cy;
-
-    // Dot product between normal and centroid-to-origin vector
-    float dot = line.a_dash * vec_to_origin_x + line.b_dash * vec_to_origin_y;
-
-    // If dot product is positive, normal points TOWARD origin (flip it)
-    if (dot > 0) {
-        line.a_dash *= -1;
-        line.b_dash *= -1;
-        line.c_dash *= -1;
-    }
-}
-
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (processing_done) return;  // Ignore further callbacks
@@ -207,7 +181,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             double sin_t = sin(theta);
             double cos_t = cos(theta);
 
-            obstaclePoints[i].x = r * cos_t - dL;
+            obstaclePoints[i].x = r * cos_t + dL;
             obstaclePoints[i].y = r * sin_t;
 
             // Check if the value is less than the current minimum distance
@@ -238,15 +212,17 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         // RANSAC to find lines
         Line line;
         if (!ransacLineFit(obstaclePoints, used, line) || line.inliers.size() < MIN_INLIERS) break;
-        correctNormalDirection(line, 0.0, 0.0); // Correct the normal direction
+        //correctNormalDirection(line, 0.0, 0.0); // Correct the normal direction
         lines.push_back(line);
         //publishLineMarker(line, x, y, line_id++);
     }
 
-    ROS_INFO("Found %zu lines", lines.size());
 
     if (lines.empty()) return; // no lines found
 
+    ROS_INFO("Found %zu lines", lines.size());
+	ROS_INFO("Line 1 y = %f x + %f", - lines[0].a_dash / lines[0].b_dash, - lines[0].c_dash / lines[0].b_dash);
+	ROS_INFO("Line 2 y = %f x + %f", - lines[1].a_dash / lines[0].b_dash, - lines[1].c_dash / lines[1].b_dash);
     // Find the pair of perpendicular lines closest to the LiDAR (origin)
     std::vector<Line> perpendicular_lines;
     float min_total_distance = std::numeric_limits<float>::max();
@@ -290,47 +266,32 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
           intersectionPoint.x,
           intersectionPoint.y,
           sqrt(intersectionPoint.x * intersectionPoint.x + intersectionPoint.y * intersectionPoint.y));
-		float half_cell = 0.2;
+		float diag_half_cell = 0.8 / std::sqrt(2);
+		float dx = intersectionPoint.x;
+		float dy = intersectionPoint.y;
 
-		float n1_x = -perpendicular_lines[0].a_dash;
-		float n1_y = -perpendicular_lines[0].b_dash;
-		float n2_x = -perpendicular_lines[1].a_dash;
-		float n2_y = -perpendicular_lines[1].b_dash;
+		float norm = std::sqrt(dx*dx + dy*dy);
+		float dir_x = -dx / norm;
+		float dir_y = -dy / norm;
 
-		float dir_x = n1_x + n2_x;
-		float dir_y = n1_y + n2_y;
-		float norm = std::sqrt(dir_x * dir_x + dir_y * dir_y);
+		float center_x = intersectionPoint.x + diag_half_cell * dir_x;
+		float center_y = intersectionPoint.y + diag_half_cell * dir_y;
 
-		dir_x /= norm;
-		dir_y /= norm;
+		float angle = atan2(center_y, center_x);
+		float distance = sqrt(center_x * center_x + center_y * center_y);
 
-		float corner_x = intersectionPoint.x;  // convert to robot frame
-		float corner_y = intersectionPoint.y;
-
-		float center_x = corner_x + half_cell * dir_x;
-		float center_y = corner_y + half_cell * dir_y;
-
-        float angle = atan2(center_y, center_x);
-
+		ROS_INFO("Direction to center: (%f, %f)", -dir_x, -dir_y);
+		ROS_INFO("Computed center: (%f, %f), distance = %.3f", center_x, center_y, distance);
 		ROS_INFO("Angle: %f", angle);
-		//spinInPlace(*diff_drive_client, angle, 3.0);
-        /*ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
-        // Calculate distances and angles
-        float x = (intersectionPoint.x > 0.0 ? intersectionPoint.x - 0.4 : intersectionPoint.x + 0.4);
-        float y = (intersectionPoint.y > 0.0 ? intersectionPoint.y - 0.4 : intersectionPoint.y + 0.4);
 
-        float angle = atan2(y, x);
-        //float distance = sqrt(x * x + y * y);
-        // Align with the first line
-        spinInPlace(*diff_drive_client, -angle , 3.0);
-        /*ros::Duration(0.5).sleep();
-        moveLinear(*diff_drive_client, distance, 3.0);
+		spinInPlace(*diff_drive_client, angle, 3.0);
+		moveLinear(*diff_drive_client, distance, 3.0);
 
-        processing_done = true;  // Mark that we're done*/
-        ros::shutdown();         // Exit the node cleanly
+        processing_done = true;
+        ros::shutdown();
     }
     else {
-        //spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
+        spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
     }
 }
 
