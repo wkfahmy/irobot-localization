@@ -1,7 +1,10 @@
 #include <ros/ros.h>
 #include <sensor_msgs/LaserScan.h>
 #include <create_fundamentals/DiffDrive.h>
+#include <plastic_fundamentals/ExecutePlan.h>
 
+constexpr double WHEEL_RADIUS_M   = 0.0325;   // 6.5 cm / 2
+constexpr double TRACK_WIDTH_M    = 0.263;    // 26.3 cm
 ros::ServiceClient* diff_drive_client;
 
 enum Direction {
