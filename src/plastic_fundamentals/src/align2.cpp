@@ -142,106 +142,6 @@ Line ransacLineFit(const std::vector<Point>& points, std::vector<bool>& used, fl
     return true;
 }
 
-struct PolarLine {
-    double theta;
-    double rho;
-};
-
-std::vector<Line> accurateRansacLineFit(const std::vector<Point>& points) {
-	const size_t M = 10;
-    const double dThetaThresh = 2.0 * M_PI/180.0;  // 2°
-    const double dRhoThresh   = 0.01; // 1 cm
-    const size_t minSupport   = 5;
-
-	std::vector<PolarLine> samples;
-    samples.reserve(M * 5);
-
-	for (size_t run = 0; run < M; ++run) {
-        std::vector<bool> used(points.size(), false);
-        while (true) {
-            Line L;
-            if (!ransacLineFit(points, used, L)
-                || L.inliers.size() < MIN_INLIERS)
-                break;
-
-            // convert to normalized (θ, ρ)
-            double theta = std::atan2(L.b_dash, L.a_dash);
-            if (theta < 0) theta += 2*M_PI;
-            double rho = -L.c_dash;
-
-            samples.push_back({theta, rho});
-        }
-	}
-
-	if (samples.empty())
-        return {};
-
-    std::vector<std::vector<int>> clusters;
-    for (int i = 0; i < (int)samples.size(); ++i) {
-        bool placed = false;
-        for (auto& C : clusters) {
-            auto& rep = samples[C[0]];
-            // circular difference
-            double dtheta = fabs(samples[i].theta - rep.theta);
-            dtheta = fmod(dtheta, 2*M_PI);
-            if (dtheta > M_PI) dtheta = 2*M_PI - dtheta;
-            double drho = fabs(samples[i].rho - rep.rho);
-
-            if (dtheta < dThetaThresh && drho < dRhoThresh) {
-                C.push_back(i);
-                placed = true;
-                break;
-            }
-        }
-        if (!placed) {
-            clusters.push_back({i});
-        }
-    }
-
-	const double dtheta_thresh = 5.0 * M_PI/180.0;  // 5°
-	const double drho_thresh = 0.01;              // 1 cm
-
-	std::vector<Line> result;
-    result.reserve(clusters.size());
-    for (auto& C : clusters) {
-        if (C.size() < minSupport)
-            continue;
-
-        // circular‐mean of θ and arithmetic‐mean of ρ
-        double sum_sin = 0, sum_cos = 0, sum_rho = 0;
-        for (int idx : C) {
-            sum_cos +=  cos(samples[idx].theta);
-            sum_sin +=  sin(samples[idx].theta);
-            sum_rho +=  samples[idx].rho;
-        }
-        double theta_avg = std::atan2(sum_sin, sum_cos);
-        if (theta_avg < 0) theta_avg += 2*M_PI;
-        double rho_avg = sum_rho / C.size();
-
-        // reconstruct line in Hesse normal form
-        Line avg;
-        avg.a_dash =  std::cos(theta_avg);
-        avg.b_dash =  std::sin(theta_avg);
-        avg.c_dash = -rho_avg;
-        avg.inliers.clear();
-
-        // (Re‐classify inliers on the averaged model, optional)
-        for (int i = 0; i < (int)points.size(); ++i) {
-            double dist = fabs(avg.a_dash * points[i].x
-                             + avg.b_dash * points[i].y
-                             + avg.c_dash);
-            if (dist < 0.05)
-                avg.inliers.push_back(i);
-        }
-
-        if (avg.inliers.size() >= MIN_INLIERS)
-            result.push_back(std::move(avg));
-    }
-
-
-	return result;
-}
-
 const double fov_deg = 240.0;
 const double R     = 0.17;
 const double dL    = 0.16;
@@ -308,7 +208,17 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     }
 
     std::vector<bool> used(obstaclePoints.size(), false);   // to track used points
-    std::vector<Line> lines = accurateRansacLineFit(obstaclePoints); // to store detected lines by RANSAC
+    std::vector<Line> lines; // to store detected lines by RANSAC
+    int line_id = 0;
+
+    while (true) {
+        // RANSAC to find lines
+        Line line;
+        if (!ransacLineFit(obstaclePoints, used, line) || line.inliers.size() < MIN_INLIERS) break;
+        //correctNormalDirection(line, 0.0, 0.0); // Correct the normal direction
+        lines.push_back(line);
+    }
+
 
     if (lines.empty()) return; // no lines found
 
@@ -351,6 +261,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         }
     }
 
+
     if (!perpendicular_lines.empty()) {
 		ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
 		ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
@@ -386,7 +297,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         processing_done = true;
         ros::shutdown();
-    } else {
+    }
+    else {
         spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
     }
 }
