@@ -56,6 +56,7 @@ void moveLinear(ros::ServiceClient& diffDrive,
     srv.request.right = 0.0;
     if (!diffDrive.call(srv))
         ROS_ERROR("Failed to send stop command!");
+    ros::Duration(2).sleep(); // Allow some time for the robot to stop    
 }
 
 

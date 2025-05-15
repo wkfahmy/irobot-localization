@@ -90,6 +90,10 @@ add_executable(align_improved src/align_improved.cpp)
 target_link_libraries(align_improved ${catkin_LIBRARIES})
 add_dependencies(align_improved create_fundamentals_generate_messages_cpp)
 
-#add_executable(execute_plan_server src/execute_plan_server.cpp)
-#target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
-#add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
+add_executable(execute_plan_server src/execute_plan_server.cpp)
+target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
+add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
+
+add_executable(executePlanSmoothly src/executePlanSmoothly.cpp)
+target_link_libraries(executePlanSmoothly ${catkin_LIBRARIES})
+add_dependencies(executePlanSmoothly create_fundamentals_generate_messages_cpp)
