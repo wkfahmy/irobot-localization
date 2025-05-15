@@ -82,57 +82,57 @@ void moveLinearSmooth(ros::ServiceClient& diffDrive, double distance_m, double m
 bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
     plastic_fundamentals::ExecutePlan::Response &res)
 {
-ROS_INFO("Executing plan with %zu steps", req.plan.size());
+    ROS_INFO("Executing plan with %zu steps", req.plan.size());
 
-int current_heading = UP;
-size_t i = 0;
+    int current_heading = UP;
+    size_t i = 0;
 
-while (i < req.plan.size()) {
-    int current_dir = req.plan[i];
+    while (i < req.plan.size()) {
+        int current_dir = req.plan[i];
 
-    size_t j = i;
-    while (j < req.plan.size() && req.plan[j] == current_dir)
-        ++j;
+        size_t j = i;
+        while (j < req.plan.size() && req.plan[j] == current_dir)
+            ++j;
 
-    int segment_length = j - i;
+        int segment_length = j - i;
 
-    // Check if next direction is different
-    if (current_heading != current_dir) {
-        int delta = current_dir - current_heading;
+        // Check if next direction is different
+        if (current_heading != current_dir) {
+            int delta = current_dir - current_heading;
 
-        // Normalize delta
-        if (delta > 3) delta -= 4;
-        if (delta < -3) delta += 4;
+            // Normalize delta
+            if (delta > 3) delta -= 4;
+            if (delta < -3) delta += 4;
 
-        // Move shortened straight segment first
-        moveLinearSmooth(*diff_drive_client, 0.486, 5.0); // hardcoded
+            // Move shortened straight segment first
+            moveLinearSmooth(*diff_drive_client, 0.486, 5.0); // hardcoded
 
-        // Then do fixed-radius arc
-        if (delta == 1 || delta == -3) {
-            driveArc(*diff_drive_client, 0.2, -M_PI_2, 5.0); // right turn
-        } else if (delta == -1 || delta == 3) {
-            driveArc(*diff_drive_client, 0.2, M_PI_2, 5.0);  // left turn
-        } else if (delta == 2 || delta == -2) {
-            driveArc(*diff_drive_client, 0.2, M_PI, 5.0);    // u-turn
+            // Then do fixed-radius arc
+            if (delta == 1 || delta == -3) {
+                driveArc(*diff_drive_client, 0.2, -M_PI_2, 5.0); // right turn
+            } else if (delta == -1 || delta == 3) {
+                driveArc(*diff_drive_client, 0.2, M_PI_2, 5.0);  // left turn
+            } else if (delta == 2 || delta == -2) {
+                driveArc(*diff_drive_client, 0.2, M_PI, 5.0);    // u-turn
+            }
+
+            current_heading = current_dir;
+
+            // Only consume 1 step (turn into new direction)
+            segment_length = 1;
+            j = i + 1;
         }
 
-        current_heading = current_dir;
+        // Full straight segment for remaining same-direction steps
+        if (segment_length > 0) {
+            moveLinearSmooth(*diff_drive_client, segment_length * 0.8, 5.0);
+        }
 
-        // Only consume 1 step (turn into new direction)
-        segment_length = 1;
-        j = i + 1;
+        i = j;
     }
 
-    // Full straight segment for remaining same-direction steps
-    if (segment_length > 0) {
-        moveLinearSmooth(*diff_drive_client, segment_length * 0.8, 5.0);
-    }
-
-    i = j;
-}
-
-res.success = true;
-return true;
+    res.success = true;
+    return true;
 }
 
 // how to run:

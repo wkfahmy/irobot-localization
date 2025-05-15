@@ -272,12 +272,15 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     std::vector<float> x, y;
     //convert lidar polar coordinates to cartesian
-    for (size_t i = 0; i < msg->ranges.size(); ++i) {
-
-
-        float distance = msg->ranges[i];
-        if (!isnan(distance) && distance >= msg->range_min && distance <= msg->range_max) {
-            float angle = msg->angle_min + i * msg->angle_increment;
+    for (int i = 0; i < msg->ranges.size(); ++i) {
+		if (i < 16 ||  i > msg->ranges.size() - 16) {
+			obstaclePoints[i].x = std::numeric_limits<double>::infinity();
+            obstaclePoints[i].y = std::numeric_limits<double>::infinity();
+			continue;
+		}
+        float r = msg->ranges[i];
+        if (!isnan(r) && r >= msg->range_min && r <= msg->range_max) {
+            double theta = msg->angle_min + i * msg->angle_increment;
             double sin_t = sin(theta);
             double cos_t = cos(theta);
 
@@ -374,6 +377,12 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
 		spinInPlace(*diff_drive_client, angle, 3.0);
 		moveLinear(*diff_drive_client, distance, 3.0);
+
+		float align_wall = acos(std::min(fabs(center_x), fabs(center_y)) / distance);
+		ROS_INFO("align Angle: %f", align_wall);
+
+		spinInPlace(*diff_drive_client, align_wall, 3.0);
+
 
         processing_done = true;
         ros::shutdown();
