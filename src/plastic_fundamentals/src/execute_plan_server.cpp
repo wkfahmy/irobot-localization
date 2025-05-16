@@ -70,17 +70,17 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
         switch(dir) {
             case RIGHT:
                 spinInPlace(*diff_drive_client, -M_PI_2, 5.0);
-                moveLinear(*diff_drive_client, 0.8, 5.0);
+                moveLinear(*diff_drive_client, 0.87, 5.0);
                 break;
             case UP:
-                moveLinear(*diff_drive_client, 0.8, 5.0);
+                moveLinear(*diff_drive_client, 0.87, 5.0);
                 break;
             case LEFT:
                 spinInPlace(*diff_drive_client, M_PI_2, 5.0);
-                moveLinear(*diff_drive_client, 0.8, 5.0);
+                moveLinear(*diff_drive_client, 0.87, 5.0);
                 break;
             case DOWN:
-                moveLinear(*diff_drive_client, -0.8, 5.0);
+                moveLinear(*diff_drive_client, -0.87, 5.0);
                 break;
             default:
                 ROS_ERROR("Invalid direction in plan");
