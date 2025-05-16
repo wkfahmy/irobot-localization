@@ -234,7 +234,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 	}
 
     std::vector<Line> perpendicular_lines;
-    float min_total_distance = std::numeric_limits<float>::max();
+    float min_total_distance = 0.8;
     Point intersectionPoint;
     for (size_t i = 0; i < lines.size(); ++i) {
         for (size_t j = i + 1; j < lines.size(); ++j) {
@@ -251,12 +251,12 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
 			float det = A1 * B2 - A2 * B1;
 			if (fabs(det) > 1e-6) {
-            ROS_INFO("Found perpendicular lines");
+            	ROS_INFO("Found perpendicular lines");
     			float x = (B1 * C2 - B2 * C1) / det;
     			float y = (A2 * C1 - A1 * C2) / det;
 				float distance = std::sqrt(x * x + y * y);
 
-				if (min_total_distance > distance) {
+				if (min_total_distance > distance && distance > R) {
                     perpendicular_lines.clear();
 					min_total_distance = distance;
                     intersectionPoint.x = x;

@@ -1,13 +1,12 @@
 #include <ros/ros.h>
 #include <sensor_msgs/LaserScan.h>
 #include <create_fundamentals/DiffDrive.h>
-#include <visualization_msgs/Marker.h>
 #include <cmath>
 #include <vector>
 #include <cstdlib>
 
 ros::ServiceClient* diff_drive_client;
-ros::Publisher marker_pub;
+
 float wheel_separation = 0.266;
 const int MIN_INLIERS = 30; // minimum inliers to consider a line valid
 const int MAX_ITERATIONS = 100; // maximum iterations for RANSAC
@@ -156,31 +155,6 @@ Line ransacLineFit(const std::vector<float>& x, const std::vector<float>& y, std
     return best_line;
 }
 
-void publishLineMarker(const Line& line, const std::vector<float>& x, const std::vector<float>& y, int id) {
-    visualization_msgs::Marker marker;
-    marker.header.frame_id = "laser";
-    marker.header.stamp = ros::Time::now();
-    marker.ns = "lines";
-    marker.id = id;
-    marker.type = visualization_msgs::Marker::LINE_STRIP;
-    marker.action = visualization_msgs::Marker::ADD;
-    marker.scale.x = 0.02;
-    marker.color.r = 1.0;
-    marker.color.a = 1.0;
-
-    geometry_msgs::Point p1, p2;
-    for (int idx : line.inliers) {
-        if (p1.x == 0 && p1.y == 0) {
-            p1.x = x[idx]; p1.y = y[idx];
-        } else {
-            p2.x = x[idx]; p2.y = y[idx];
-        }
-    }
-    marker.points.push_back(p1);
-    marker.points.push_back(p2);
-    marker_pub.publish(marker);
-}
-
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     callback_count++;
@@ -211,7 +185,6 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
         correctNormalDirection(line, x, y); // Correct the normal direction
         lines.push_back(line);
-        publishLineMarker(line, x, y, line_id++);
     }
 
     if (lines.empty()) return; // no lines found
@@ -291,8 +264,6 @@ int main(int argc, char** argv) {
     ros::Subscriber sub = n.subscribe("scan_filtered", 1, scanCallback);
     ros::ServiceClient client = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     diff_drive_client = &client;
-
-    marker_pub = n.advertise<visualization_msgs::Marker>("/lines", 10);
 
      // Keep spinning until we're done
     ros::Rate rate(10);
