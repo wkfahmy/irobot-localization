@@ -145,11 +145,7 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
             }
             current_heading = target_dir;
             segment_length--;
-
-        } /*else {
-            moveLinear(segment_length * CELL_SIZE - CELL_SIZE / 2, final_segment);
-        }*/
-
+        }
 
         if(segment_length > 0) {
             bool final_segment = (segment_end == req.plan.size());
@@ -175,7 +171,7 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
 }
 
 int main(int argc, char **argv) {
-    ros::init(argc, argv, "smooth_plan_executor");
+    ros::init(argc, argv, "execute_smooth_plan_server");
     ros::NodeHandle nh;
     
     ros::ServiceClient client = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
