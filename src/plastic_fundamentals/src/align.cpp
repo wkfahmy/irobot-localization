@@ -165,7 +165,6 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     ROS_INFO("Processing scan data...");
 
     std::vector<float> x, y;
-    //convert lidar polar coordinates to cartesian
     for (size_t i = 0; i < msg->ranges.size(); ++i) {
         float r = msg->ranges[i];
         if (!isnan(r) && r >= msg->range_min && r <= msg->range_max) {
@@ -175,38 +174,49 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         }
     }
 
-    std::vector<bool> used(x.size(), false);   // to track used points
-    std::vector<Line> lines; // to store detected lines by RANSAC
-    int line_id = 0;
+    std::vector<bool> used(x.size(), false);
+    std::vector<Line> lines;
 
     while (true) {
-        // RANSAC to find lines
         Line line = ransacLineFit(x, y, used);
-        if (line.inliers.size() < MIN_INLIERS) break;  // stop if not enough inliers
-        correctNormalDirection(line, x, y); // Correct the normal direction
+        if (line.inliers.size() < MIN_INLIERS) break;
+        correctNormalDirection(line, x, y);
         lines.push_back(line);
     }
 
-    if (lines.empty()) return; // no lines found
+    if (lines.empty()) return;
 
-    // Find the pair of perpendicular lines closest to the LiDAR (origin)
     std::vector<Line> perpendicular_lines;
     float min_total_distance = std::numeric_limits<float>::max();
 
     for (size_t i = 0; i < lines.size(); ++i) {
         for (size_t j = i + 1; j < lines.size(); ++j) {
             float dot = lines[i].a_dash * lines[j].a_dash + lines[i].b_dash * lines[j].b_dash;
-            if (fabs(dot) < 0.3) { // approx. perpendicular
-
-                float distance1 = fabs(lines[i].c_dash);  // distance from origin to line 1
-                float distance2 = fabs(lines[j].c_dash);  // distance from origin to line 2
+            if (fabs(dot) < 0.3) {
+                float distance1 = fabs(lines[i].c_dash);
+                float distance2 = fabs(lines[j].c_dash);
                 float total_distance = distance1 + distance2;
 
                 if (total_distance < min_total_distance) {
-                    min_total_distance = total_distance;
-                    perpendicular_lines.clear();
-                    perpendicular_lines.push_back(lines[i]);
-                    perpendicular_lines.push_back(lines[j]);
+                    // Check if lines are connected
+                    float min_point_distance = std::numeric_limits<float>::max();
+                    for (int idx1 : lines[i].inliers) {
+                        for (int idx2 : lines[j].inliers) {
+                            float dx = x[idx1] - x[idx2];
+                            float dy = y[idx1] - y[idx2];
+                            float d = std::sqrt(dx * dx + dy * dy);
+                            if (d < min_point_distance) min_point_distance = d;
+                        }
+                    }
+
+                    if (min_point_distance < 0.1) { // threshold for "connected"
+                        min_total_distance = total_distance;
+                        perpendicular_lines.clear();
+                        perpendicular_lines.push_back(lines[i]);
+                        perpendicular_lines.push_back(lines[j]);
+                    } else {
+                        ROS_INFO("Lines are perpendicular but not connected (min_dist = %.2f)", min_point_distance);
+                    }
                 }
             }
         }
@@ -215,46 +225,41 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     bool found_perpendicular = !perpendicular_lines.empty();
 
     if (found_perpendicular) {
-        // Calculate distances and angles
         float distance1 = fabs(perpendicular_lines[0].c_dash);
         float distance2 = fabs(perpendicular_lines[1].c_dash);
-        if(distance1 > 0.8 || distance2 > 0.8) {
+        if (distance1 > 0.8 || distance2 > 0.8) {
             ROS_INFO("Distance to wall is too far, rotating 180 degrees");
-            spinInPlace(*diff_drive_client, M_PI, 3.0);
+            spinInPlace(*diff_drive_client, M_PI, 5.0);
             ros::Duration(0.5).sleep();
             return;
         }
-        float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
 
-        // Adjust distances to center
+        float angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
         float center_distance1 = distance1 + 0.16 * cos(angle);
         float center_distance2 = distance2 - 0.16 * sin(angle);
 
-        // Align with the first line
         spinInPlace(*diff_drive_client, angle, 3.0);
-
         ros::Duration(0.5).sleep();
         moveLinear(*diff_drive_client, center_distance1 - 0.4, 3.0);
 
-        // Determine turn direction and align with the second line
         float turn_angle = (perpendicular_lines[0].a_dash * perpendicular_lines[1].b_dash - 
                             perpendicular_lines[0].b_dash * perpendicular_lines[1].a_dash) > 0 ? -M_PI_2 : M_PI_2;
         spinInPlace(*diff_drive_client, turn_angle, 3.0);
-
         ros::Duration(0.5).sleep();
 
-        // Move to the center of the cell
         moveLinear(*diff_drive_client, -(center_distance2 - 0.4), 3.0);
-        if(callback_count > 2) {
+        if (callback_count > 2) {
             processing_done = true;
             ros::shutdown();
         }
-    }
-    else {
-        spinInPlace(*diff_drive_client, M_PI, 3.0);
+    } else {
+        ROS_INFO("No connected perpendicular lines found. Rotating 180 degrees...");
+        spinInPlace(*diff_drive_client, M_PI, 5.0);
         ros::Duration(0.5).sleep();
     }
 }
+
+
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "align_node");
