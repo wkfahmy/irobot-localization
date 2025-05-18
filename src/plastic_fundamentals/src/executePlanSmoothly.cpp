@@ -7,8 +7,8 @@
 // Constants
 const double WHEEL_RADIUS = 0.0325;
 const double TRACK_WIDTH = 0.263;
-const double CELL_SIZE = 0.8;
-const double ARC_RADIUS = 0.2;
+const double CELL_SIZE = 0.87;
+const double ARC_RADIUS = 0.4;
 const double MAX_WHEEL_SPEED = 8;  // rad/s
 
 // Direction enum (must match ExecutePlan.srv)
@@ -41,6 +41,9 @@ void spinInPlace(ros::ServiceClient& diffDrive,
     srv.request.right = 0.0;
     if (!diffDrive.call(srv))
         ROS_ERROR("Failed to send stop command!");
+
+    ros::Duration(0.1).sleep();
+
 }
 
 void driveArc(double angle_rad) {
@@ -67,38 +70,26 @@ void driveArc(double angle_rad) {
     ros::Duration(duration).sleep();
 }
 
-void moveLinear(double distance, bool is_final_segment = false) {
-    double accel_time = 0.5;
-    double cruise_speed = WHEEL_RADIUS * MAX_WHEEL_SPEED;
-    double cruise_time = std::max(0.0, (distance - accel_time*cruise_speed*2)/cruise_speed);
+void moveLinear(ros::ServiceClient& diffDrive,
+                double distance_m,
+                double wheel_speed_rad_s)
+{
+    const double linear_speed = WHEEL_RADIUS * wheel_speed_rad_s;
+    const double duration_s = std::fabs(distance_m) / std::fabs(linear_speed);
 
     create_fundamentals::DiffDrive srv;
+    srv.request.left = (distance_m >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
+    srv.request.right = srv.request.left;
 
-    // Accelerate
-    for(double t=0; t<accel_time; t+=0.1) {
-        double speed = MAX_WHEEL_SPEED * (t/accel_time);
-        srv.request.left = speed;
-        srv.request.right = speed;
-        diff_drive_client->call(srv);
-        ros::Duration(0.1).sleep();
-    }
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send move command!");
 
-    // Cruise
-    srv.request.left = MAX_WHEEL_SPEED;
-    srv.request.right = MAX_WHEEL_SPEED;
-    diff_drive_client->call(srv);
-    ros::Duration(cruise_time).sleep();
+    ros::Duration(duration_s).sleep();
 
-    // Decelerate only for final segment
-    if(is_final_segment) {
-        for(double t=accel_time; t>0; t-=0.1) {
-            double speed = MAX_WHEEL_SPEED * (t/accel_time);
-            srv.request.left = speed;
-            srv.request.right = speed;
-            diff_drive_client->call(srv);
-            ros::Duration(0.1).sleep();
-        }
-    }
+    srv.request.left = 0.0;
+    srv.request.right = 0.0;
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send stop command!");
 }
 
 bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
@@ -106,6 +97,24 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
 {
     int current_heading = UP;
     size_t idx = 0;
+
+    Direction target_dir = static_cast<Direction>(req.plan[idx]);
+    if (target_dir != current_heading) {
+        float dir = target_dir - 1;
+        if(dir == 2) {
+            spinInPlace(*diff_drive_client, M_PI, 5.0);
+        } else {
+            spinInPlace(*diff_drive_client, dir * M_PI_2, 5.0);
+        }
+
+        current_heading = target_dir;
+    }
+
+    //bool final_segment = (segment_end == req.plan.size());
+    moveLinear(*diff_drive_client, CELL_SIZE / 2, 8.0);
+
+
+    idx++;
 
     while(idx < req.plan.size()) {
         // Group consecutive same directions
@@ -135,12 +144,21 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
                 spinInPlace(*diff_drive_client, turn_angle, MAX_WHEEL_SPEED);
             }
             current_heading = target_dir;
-        }
+            segment_length--;
 
-        // Execute straight movement
+        } /*else {
+            moveLinear(segment_length * CELL_SIZE - CELL_SIZE / 2, final_segment);
+        }*/
+
+
         if(segment_length > 0) {
             bool final_segment = (segment_end == req.plan.size());
-            moveLinear(segment_length * CELL_SIZE, final_segment);
+            moveLinear(*diff_drive_client, segment_length * CELL_SIZE, 8.0);
+        }
+
+        bool final_segment = (segment_end == req.plan.size());
+        if (final_segment) {
+            moveLinear(*diff_drive_client, CELL_SIZE / 2, 8.0);
         }
 
         idx = segment_end;

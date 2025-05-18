@@ -18,13 +18,15 @@ const int MIN_INLIERS = 50; // minimum inliers to consider a line valid
 const int MAX_ITERATIONS = 200; // maximum iterations for RANSAC
 const float DISTANCE_THRESHOLD = 0.01; // distance threshold for inliers
 constexpr double WHEEL_RADIUS_M   = 0.0325;
-constexpr double TRACK_WIDTH_M    = 0.263;
+constexpr double TRACK_WIDTH_M    = 0.276;
 
 int align_passes = 2;
 
 const double fov_deg = 240.0;
 const double R     = 0.17;
 const double dL    = 0.16;
+
+float cell_size = 0.8;
 
 
 bool processing_done = false;
@@ -241,10 +243,10 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
  			float A1 = lines[i].a_dash;
 			float B1 = lines[i].b_dash;
-			float C1 = lines[i].c_dash;
+			float C1 = fmod(lines[i].c_dash, cell_size);
 			float A2 = lines[j].a_dash;
 			float B2 = lines[j].b_dash;
-			float C2 = lines[j].c_dash;
+			float C2 = fmod(lines[j].c_dash, cell_size);
 
 			float dot = A1 * A2 + B1 * B2;
 			if (fabs(dot) > 0.2) continue;
@@ -292,8 +294,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 		ROS_INFO("Direction to center: (%f, %f)", -dir_x, -dir_y);
 		ROS_INFO("Computed center: (%f, %f), distance = %.3f", center_x, center_y, distance);
 
-		spinInPlace(*diff_drive_client, angle, 3.0);
-		moveLinear(*diff_drive_client, distance, 3.0);
+		spinInPlace(*diff_drive_client, angle, 5.0);
+		moveLinear(*diff_drive_client, distance, 5.0);
 
 
 
@@ -302,14 +304,15 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 			float align_angle = atan2(perpendicular_lines[0].b_dash, perpendicular_lines[0].a_dash);
 			float align_wall = align_angle - angle;
 
-			spinInPlace(*diff_drive_client, align_wall, 3.0);
+			spinInPlace(*diff_drive_client, align_wall, 5.0);
 
         	processing_done = true;
         	ros::shutdown();
 		}
     }
     else {
-        spinInPlace(*diff_drive_client, 2 * M_PI / 3, 3.0); // Turn 180 degrees if no lines found
+        spinInPlace(*diff_drive_client, 2 * M_PI / 3, 5.0); // Turn 180 degrees if no lines found
+    	ros::Duration(0.5).sleep();
     }
 }
 
