@@ -59,47 +59,46 @@ void moveLinear(ros::ServiceClient& diffDrive,
     ros::Duration(2).sleep(); // Allow some time for the robot to stop    
 }
 
-
-
-
 bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
                   plastic_fundamentals::ExecutePlan::Response &res)
 {
     ROS_INFO("Executing plan with %zu steps", req.plan.size());
-    for(int dir : req.plan) {
-        switch(dir) {
-            case RIGHT:
-                spinInPlace(*diff_drive_client, -M_PI_2, 5.0);
-                moveLinear(*diff_drive_client, 0.87, 5.0);
-                break;
-            case UP:
-                moveLinear(*diff_drive_client, 0.87, 5.0);
-                break;
-            case LEFT:
-                spinInPlace(*diff_drive_client, M_PI_2, 5.0);
-                moveLinear(*diff_drive_client, 0.87, 5.0);
-                break;
-            case DOWN:
-                moveLinear(*diff_drive_client, -0.87, 5.0);
-                break;
-            default:
-                ROS_ERROR("Invalid direction in plan");
-                res.success = false;
-                return false;
+    Direction current_dir = UP; // Assume starting direction is UP (global frame)
+
+    for (int dir : req.plan) {
+        // Validate direction code
+        if (dir < RIGHT || dir > DOWN) {
+            ROS_ERROR("Invalid direction code %d in plan", dir_code);
+            res.success = false;
+            return false;
         }
+
+        Direction target_dir = static_cast<Direction>(dir);
+
+        // Calculate required rotation if needed
+        if (target_dir != current_dir) {
+            int delta = (static_cast<int>(target_dir) - static_cast<int>(current_dir));
+            delta = (delta + 4) % 4; // Ensure positive modulo
+            if (delta > 2) delta -= 4; // Convert to minimal rotation
+
+            double angle_rad = delta * (M_PI / 2.0);
+            spinInPlace(*diff_drive_client, angle_rad, 5.0);
+        }
+
+        // Move forward in the target direction
+        moveLinear(*diff_drive_client, 0.87, 5.0);
+
+        // Update current direction
+        current_dir = target_dir;
     }
+
     res.success = true;
     return true;
 }
 
-
-
 int main(int argc, char **argv) {
     ros::init(argc, argv, "execute_plan_server");
     ros::NodeHandle n;
-
-    // should we call align here directly?
-    // or should we run align first and then call this?
 
     ros::ServiceClient client = n.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     diff_drive_client = &client;
@@ -108,6 +107,3 @@ int main(int argc, char **argv) {
     ros::spin();
     return 0;
 }
-
-
-

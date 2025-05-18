@@ -21,6 +21,28 @@ enum Direction {
 
 ros::ServiceClient* diff_drive_client;
 
+void spinInPlace(ros::ServiceClient& diffDrive,
+                 double angle_rad,
+                 double wheel_speed_rad_s)
+{
+    const double omega_robot = 2.0 * WHEEL_RADIUS * wheel_speed_rad_s / TRACK_WIDTH;
+    const double duration_s = std::fabs(angle_rad) / std::fabs(omega_robot);
+
+    create_fundamentals::DiffDrive srv;
+    srv.request.right = (angle_rad >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
+    srv.request.left = -(srv.request.right);
+
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send spin command!");
+
+    ros::Duration(duration_s).sleep();
+
+    srv.request.left = 0.0;
+    srv.request.right = 0.0;
+    if (!diffDrive.call(srv))
+        ROS_ERROR("Failed to send stop command!");
+}
+
 void driveArc(double angle_rad) {
     double outer_speed = MAX_WHEEL_SPEED;
     double v_outer = WHEEL_RADIUS * outer_speed;
@@ -99,12 +121,19 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
             int delta = (target_dir - current_heading + 4) % 4;
             double turn_angle = 0.0;
 
-            if(delta == 1) turn_angle = -M_PI_2;      // Right turn
-            else if(delta == 3) turn_angle = M_PI_2;  // Left turn
-            else if(delta == 2) turn_angle = M_PI;    // U-turn
-
-            // Execute turn while moving forward
-            driveArc(turn_angle);
+            if(delta == 1){
+                turn_angle = -M_PI_2;      // Left turn
+                driveArc(turn_angle);
+            }
+            
+            else if(delta == 3){
+                turn_angle = M_PI_2;  // Right turn
+                driveArc(turn_angle);
+            }
+            else if(delta == 2){
+                turn_angle = M_PI;    // rotate 180 degrees
+                spinInPlace(*diff_drive_client, turn_angle, MAX_WHEEL_SPEED);
+            }
             current_heading = target_dir;
         }
 
