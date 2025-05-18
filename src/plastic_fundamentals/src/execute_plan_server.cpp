@@ -68,7 +68,7 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req,
     for (int dir : req.plan) {
         // Validate direction code
         if (dir < RIGHT || dir > DOWN) {
-            ROS_ERROR("Invalid direction code %d in plan", dir_code);
+            ROS_ERROR("Invalid direction code %d in plan", dir);
             res.success = false;
             return false;
         }
