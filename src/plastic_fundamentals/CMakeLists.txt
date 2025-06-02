@@ -30,8 +30,12 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 
 #uncomment if you have defined messages
-#add_message_files(FILES
-#)
+add_message_files(FILES
+    Cell.msg
+    Grid.msg
+    Pose.msg
+    Row.msg
+)
 #uncomment if you have defined services
 add_service_files(FILES
     ExecutePlan.srv
@@ -64,39 +68,10 @@ catkin_package(
 
 include_directories(include ${catkin_INCLUDE_DIRS})
 
-add_executable(wanderer src/wanderer.cpp)
-target_link_libraries(wanderer ${catkin_LIBRARIES})
-add_dependencies(wanderer create_fundamentals_generate_messages_cpp)
-
-add_executable(square_no_sensors src/square_no_sensors.cpp)
-target_link_libraries(square_no_sensors ${catkin_LIBRARIES})
-add_dependencies(square_no_sensors create_fundamentals_generate_messages_cpp)
-
-add_executable(square_with_encoders src/square_with_encoders.cpp)
-target_link_libraries(square_with_encoders ${catkin_LIBRARIES})
-add_dependencies(square_with_encoders create_fundamentals_generate_messages_cpp)
-
-
-
 add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
 
-add_executable(align2 src/align2.cpp)
-target_link_libraries(align2 ${catkin_LIBRARIES})
-add_dependencies(align2 create_fundamentals_generate_messages_cpp)
-
-add_executable(align_improved src/align_improved.cpp)
-target_link_libraries(align_improved ${catkin_LIBRARIES})
-add_dependencies(align_improved create_fundamentals_generate_messages_cpp)
-
-add_executable(align4 src/align4.cpp)
-target_link_libraries(align4 ${catkin_LIBRARIES})
-add_dependencies(align4 create_fundamentals_generate_messages_cpp)
-
-#add_executable(execute_plan_server src/execute_plan_server.cpp)
-#target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
-#add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
 add_executable(execute_plan_server src/execute_plan_server.cpp)
 target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
 add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
