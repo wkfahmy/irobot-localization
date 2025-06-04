@@ -1,0 +1,4 @@
+<launch>
+    <node pkg="plastic_fundamentals" type="mcl_localization" name="localization" output="screen" />
+    <node pkg="plastic_fundamentals" type="publish_map.py" name="map_publisher" output="screen" />
+</launch>

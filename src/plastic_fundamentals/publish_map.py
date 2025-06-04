@@ -17,10 +17,10 @@ with open(filename, 'r') as f:
 
 print("publishing map: {}".format(map_layout))
 
-node = rospy.init_node('example_map_publisher')
+node = rospy.init_node('map_publisher')
 pub = rospy.Publisher('map', Grid, queue_size=1)
 
-grid = Gid()
+grid = Grid()
 for row_layout in map_layout:
     row = Row()
     for cell_layout in row_layout:

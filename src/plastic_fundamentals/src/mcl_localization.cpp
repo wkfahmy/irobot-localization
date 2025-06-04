@@ -434,8 +434,16 @@ void spinInPlace(ros::ServiceClient& diffDrive, double angle_rad, double wheel_s
 }
 
 bool isClearPath(const std::vector<double>& actual_scan, double obstacle_threshold) {
-    size_t left_index = (int)(actual_scan.size() * (0.0 - (-M_PI / 2)) / M_PI);
-    size_t right_index = (int)(actual_scan.size() * (M_PI / 2) / M_PI);
+    double min_angle = -M_PI / 4;
+    double max_angle = M_PI / 4;
+
+    double angle_resolution = (max_angle - min_angle) / actual_scan.size();
+
+    size_t left_index = static_cast<size_t>((-M_PI / 2 - min_angle) / angle_resolution);
+    size_t right_index = static_cast<size_t>((M_PI / 2 - min_angle) / angle_resolution);
+
+    left_index = std::max(left_index, static_cast<size_t>(0));
+    right_index = std::min(right_index, actual_scan.size() - 1);
 
     for (size_t i = left_index; i <= right_index; ++i) {
         double distance = actual_scan[i];
@@ -500,7 +508,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     double n_eff = calculateEffectiveParticles();
     double effective_particles_threshold = 0.5 * NUM_PARTICLES;
     
-    if (max_weight > 0.001 && n_eff > effective_particles_threshold) {
+    if (max_weight > 0.01 && n_eff > effective_particles_threshold) {
         is_localized = true;
         ROS_INFO("Localized at row=%d, column=%d, orientation=%d (confidence=%.3f)", 
                  current_pose.row, current_pose.column, current_pose.orientation, max_weight);
@@ -517,7 +525,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 void localizationRoutine(ros::Rate rate) {
     LocalizationPhase localization_phase = SPIN;
 
-    double move_distance = 0.5;
+    double move_distance = 0.8;
 
     while (ros::ok() && !processing_done) {
         if (is_localized) {
@@ -563,11 +571,19 @@ int main(int argc, char** argv) {
     diff_drive_client = &client;
     
     ROS_INFO("MCL localization node started");
-    
-    ROS_INFO("Performing initial 360-degree scan...");
-    spinInPlace(*diff_drive_client, 2*M_PI, 2.0);
+
+
+    while (!map_data) {
+        ROS_INFO("Waiting for map data to start..");
+        ros::Duration(2).sleep();
+
+        ros::spinOnce();
+    }
 
     ros::Rate rate(20);
+
+    ros::spinOnce();
+    rate.sleep();
 
     localizationRoutine(rate);
 

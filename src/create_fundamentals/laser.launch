@@ -1,4 +1,4 @@
-<launch>
+rosrun plastic_fundamentals publish_map.py<launch>
   <!--<node pkg="hokuyo_node" type="hokuyo_node" name="hokuyo_node">
   </node>
   -->
