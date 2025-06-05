@@ -31,11 +31,9 @@ constexpr double LIDAR_OFFSET_M = 0.16;
 constexpr double CELL_SIZE = 0.8;
 
 constexpr int NUM_PARTICLES = 1000;
-constexpr double INIT_X_NOISE = 0.1;
-constexpr double INIT_Y_NOISE = 0.1;
+constexpr double INIT_TRANSLATION_NOISE = 0.1;
 constexpr double INIT_THETA_NOISE = 0.2;
-constexpr double MOTION_X_NOISE = 0.02;
-constexpr double MOTION_Y_NOISE = 0.02;
+constexpr double MOTION_TRANSLATION_NOISE = 0.02;
 constexpr double MOTION_THETA_NOISE = 0.05;
 constexpr double RESAMPLE_THRESHOLD = 0.5;
 
@@ -85,6 +83,9 @@ std::vector<Particle> particles;
 
 
 void publishParticlesAndMap() {
+
+  ROS_INFO("Publishing particles");
+
   // 1. --- Particles as Green Dots ---
   visualization_msgs::Marker particle_marker;
   particle_marker.header.frame_id = "map";
@@ -218,8 +219,8 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
     particles.reserve(NUM_PARTICLES);
     
     // Create distributions for random noise
-    std::uniform_real_distribution<double> x_noise_dist(-INIT_X_NOISE, INIT_X_NOISE);
-    std::uniform_real_distribution<double> y_noise_dist(-INIT_Y_NOISE, INIT_Y_NOISE);
+    std::uniform_real_distribution<double> x_noise_dist(-INIT_TRANSLATION_NOISE, INIT_TRANSLATION_NOISE);
+    std::uniform_real_distribution<double> y_noise_dist(-INIT_TRANSLATION_NOISE, INIT_TRANSLATION_NOISE);
     std::uniform_real_distribution<double> theta_noise_dist(-INIT_THETA_NOISE, INIT_THETA_NOISE);
     
     int num_rows = map->rows.size();
@@ -341,18 +342,12 @@ void resampleParticles() {
 
 void updateParticlesMotion(double x_bar, double y_bar, double theta_bar,
                            double x_bar_prime, double y_bar_prime, double theta_bar_prime) {
-    // Motion noise parameters (tune these for your system)
-    constexpr double ALPHA1 = 0.1;
-    constexpr double ALPHA2 = 0.1;
-    constexpr double ALPHA3 = 0.2;
-    constexpr double ALPHA4 = 0.2;
 
-    // Compute odometry-based motion components
+
     double delta_rot1 = atan2(y_bar_prime - y_bar, x_bar_prime - x_bar) - theta_bar;
     double delta_trans = std::sqrt(std::pow(x_bar_prime - x_bar, 2) + std::pow(y_bar_prime - y_bar, 2));
     double delta_rot2 = theta_bar_prime - theta_bar - delta_rot1;
 
-    // Normalize angles
     while (delta_rot1 > M_PI) delta_rot1 -= 2 * M_PI;
     while (delta_rot1 <= -M_PI) delta_rot1 += 2 * M_PI;
     while (delta_rot2 > M_PI) delta_rot2 -= 2 * M_PI;
@@ -360,9 +355,9 @@ void updateParticlesMotion(double x_bar, double y_bar, double theta_bar,
 
     for (auto& p : particles) {
         // Compute noise variances
-        double var_rot1 = ALPHA1 * delta_rot1 * delta_rot1 + ALPHA2 * delta_trans * delta_trans;
-        double var_trans = ALPHA3 * delta_trans * delta_trans + ALPHA4 * (delta_rot1 * delta_rot1 + delta_rot2 * delta_rot2);
-        double var_rot2 = ALPHA1 * delta_rot2 * delta_rot2 + ALPHA2 * delta_trans * delta_trans;
+        double var_rot1 = INIT_TRANSLATION_NOISE * delta_rot1 * delta_rot1 + MOTION_TRANSLATION_NOISE * delta_trans * delta_trans;
+        double var_trans = MOTION_THETA_NOISE * delta_trans * delta_trans + MOTION_THETA_NOISE * (delta_rot1 * delta_rot1 + delta_rot2 * delta_rot2);
+        double var_rot2 = MOTION_TRANSLATION_NOISE * delta_rot2 * delta_rot2 + MOTION_TRANSLATION_NOISE * delta_trans * delta_trans;
 
         // Sample noisy motion components
         std::normal_distribution<double> rot1_noise(0, std::sqrt(var_rot1));
@@ -712,11 +707,11 @@ void moveLinear(ros::ServiceClient& diffDriveClient, double distance_m, double s
 }
 
 void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
+    if (!particles.empty()) return;
+
     map_data = msg;
     ROS_INFO("Received map data");
-    
-    if (!particles.empty()) return;
-    
+
     initializeParticles(map_data);
 }
 
@@ -731,7 +726,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     resampleParticles();
     
     current_pose = estimatePose();
-    
+
     double max_weight = 0;
     for (const auto& p : particles) {
         max_weight = std::max(max_weight, p.weight);
@@ -772,7 +767,7 @@ void localizationRoutine(ros::Rate rate) {
                     break;
 
                 case MOVE:
-                    if (isClearPath(actual_scan, move_distance)) {
+                    if (isClearPath(actual_scan, 0.1)) {
                         ROS_INFO("Moving robot to cover more area...");
                         moveLinear(*diff_drive_client, move_distance, 3.0);
                         localization_phase = SPIN;
@@ -785,6 +780,9 @@ void localizationRoutine(ros::Rate rate) {
         }
 
         ros::spinOnce();
+
+        publishParticlesAndMap();
+
         rate.sleep();
     }
 }
@@ -817,7 +815,7 @@ int main(int argc, char** argv) {
         ros::spinOnce();
     }
 
-    ros::Rate rate(20);
+    ros::Rate rate(50);
 
     ros::spinOnce();
     rate.sleep();

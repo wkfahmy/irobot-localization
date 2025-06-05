@@ -37,11 +37,13 @@ bool first_localization = true;
 
 bool processing_done = false;
 
+bool pathClear = false;
+
 ros::Publisher particle_pub;
 ros::Publisher pose_pub;
 std::default_random_engine random_generator;
 
-std::vector<double> actual_scan;
+sensor_msgs::LaserScan::ConstPtr actual_scan;
 
 enum LocalizationPhase {
     SPIN,
@@ -433,23 +435,26 @@ void spinInPlace(ros::ServiceClient& diffDrive, double angle_rad, double wheel_s
     updateParticlesMotion(0, 0, angle_rad);
 }
 
-bool isClearPath(const std::vector<double>& actual_scan, double obstacle_threshold) {
-    double min_angle = -M_PI / 4;
-    double max_angle = M_PI / 4;
+bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_threshold) {
+    float angle_min_limit = -M_PI / 36;
+    float angle_max_limit =  M_PI / 36;
 
-    double angle_resolution = (max_angle - min_angle) / actual_scan.size();
+    int start_index = std::max(0, static_cast<int>((angle_min_limit - msg->angle_min) / msg->angle_increment));
+    int end_index = std::min(static_cast<int>(msg->ranges.size()) - 1, static_cast<int>((angle_max_limit - msg->angle_min) / msg->angle_increment));
 
-    size_t left_index = static_cast<size_t>((-M_PI / 2 - min_angle) / angle_resolution);
-    size_t right_index = static_cast<size_t>((M_PI / 2 - min_angle) / angle_resolution);
+    int invalid = 0;
 
-    left_index = std::max(left_index, static_cast<size_t>(0));
-    right_index = std::min(right_index, actual_scan.size() - 1);
-
-    for (size_t i = left_index; i <= right_index; ++i) {
-        double distance = actual_scan[i];
-        if (distance < obstacle_threshold) {
-            return false;
+    for(int i = start_index; i < end_index; i++){
+        float value = msg->ranges[i];
+        if(!isnan(value) && value >= msg->range_min && value <= msg->range_max){
+            if(value < obstacle_threshold){
+                invalid = invalid + 1;
+            }
         }
+    }
+
+    if (invalid > (end_index - start_index) * 0.2) {
+        return false;
     }
 
     return true;
@@ -489,11 +494,14 @@ void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    actual_scan = std::vector<double>(msg->ranges.begin(), msg->ranges.end());
-
     if (processing_done) return;
     if (!map_data || particles.empty()) return;
-    
+
+    pathClear = false;
+    if(isClearPath(msg, 0.6)) {
+        pathClear = true;
+    }
+
     updateParticlesSensor(msg);
     
     resampleParticles();
@@ -540,7 +548,8 @@ void localizationRoutine(ros::Rate rate) {
                     break;
 
                 case MOVE:
-                    if (isClearPath(actual_scan, move_distance)) {
+                    ros::spinOnce();
+                    if (pathClear) {
                         ROS_INFO("Moving robot to cover more area...");
                         moveLinear(*diff_drive_client, move_distance, 3.0);
                         localization_phase = SPIN;
@@ -580,15 +589,13 @@ int main(int argc, char** argv) {
         ros::spinOnce();
     }
 
-    ros::Rate rate(20);
-
-    ros::spinOnce();
-    rate.sleep();
+    ros::Rate rate(50);
 
     localizationRoutine(rate);
 
     while (ros::ok()) {
         pose_pub.publish(current_pose);
+
         ros::spinOnce();
         rate.sleep();
     }
