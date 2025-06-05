@@ -1,6 +1,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/LaserScan.h>
 #include <create_fundamentals/DiffDrive.h>
+#include "create_fundamentals/ResetEncoders.h"
 #include <plastic_fundamentals/Grid.h>
 #include <plastic_fundamentals/Row.h>
 #include <plastic_fundamentals/Cell.h>
@@ -39,6 +40,9 @@ constexpr double MOTION_THETA_NOISE = 0.05;
 constexpr double RESAMPLE_THRESHOLD = 0.5;
 
 ros::ServiceClient* diff_drive_client;
+
+ros::ServiceClient* reset_encoders_client;
+
 plastic_fundamentals::Grid::ConstPtr map_data;
 plastic_fundamentals::Pose current_pose;
 bool is_localized = false;
@@ -48,6 +52,10 @@ bool processing_done = false;
 
 ros::Publisher particle_pub;
 ros::Publisher pose_pub;
+
+ros::Publisher marker_pub;
+
+
 std::default_random_engine random_generator;
 
 std::vector<double> actual_scan;
@@ -69,6 +77,109 @@ struct Particle {
     int orientation;    // Grid orientation (0-3)
 };
 
+
+// Global particle set
+std::vector<Particle> particles;
+
+
+
+
+void publishParticlesAndMap() {
+  // 1. --- Particles as Green Dots ---
+  visualization_msgs::Marker particle_marker;
+  particle_marker.header.frame_id = "map";
+  particle_marker.header.stamp = ros::Time::now();
+  particle_marker.ns = "particles";
+  particle_marker.id = 0;
+  particle_marker.type = visualization_msgs::Marker::POINTS;
+  particle_marker.action = visualization_msgs::Marker::ADD;
+  particle_marker.pose.orientation.w = 1.0;
+  particle_marker.scale.x = 0.05;
+  particle_marker.scale.y = 0.05;
+  particle_marker.color.r = 0.0;
+  particle_marker.color.g = 1.0;
+  particle_marker.color.b = 0.0;
+  particle_marker.color.a = 1.0;
+
+  for (const Particle& p : particles) {
+    geometry_msgs::Point pt;
+    pt.x = p.x;
+    pt.y = p.y;
+    pt.z = 0.0;
+    particle_marker.points.push_back(pt);
+  }
+
+  marker_pub.publish(particle_marker);
+
+  // 2. --- Map Walls as Blue Lines ---
+  visualization_msgs::Marker wall_marker;
+  wall_marker.header.frame_id = "map";
+  wall_marker.header.stamp = ros::Time::now();
+  wall_marker.ns = "walls";
+  wall_marker.id = 1;
+  wall_marker.type = visualization_msgs::Marker::LINE_LIST;
+  wall_marker.action = visualization_msgs::Marker::ADD;
+  wall_marker.pose.orientation.w = 1.0;
+  wall_marker.scale.x = 0.03;
+  wall_marker.color.r = 0.0;
+  wall_marker.color.g = 0.0;
+  wall_marker.color.b = 1.0;
+  wall_marker.color.a = 1.0;
+
+  /*for (const Wall& wall : map) {
+    geometry_msgs::Point p1, p2;
+    p1.x = wall.start_point.x();
+    p1.y = wall.start_point.y();
+    p1.z = 0.0;
+    p2.x = wall.end_point.x();
+    p2.y = wall.end_point.y();
+    p2.z = 0.0;
+    wall_marker.points.push_back(p1);
+    wall_marker.points.push_back(p2);
+  }
+  marker_pub.publish(wall_marker);*/
+
+  // 3. --- Estimated Robot Pose as Yellow Cylinder ---
+  visualization_msgs::Marker robot_marker;
+  robot_marker.header.frame_id = "map";
+  robot_marker.header.stamp = ros::Time::now();
+  robot_marker.ns = "robot";
+  robot_marker.id = 2;
+  robot_marker.type = visualization_msgs::Marker::CYLINDER;
+  robot_marker.action = visualization_msgs::Marker::ADD;
+  robot_marker.scale.x = 0.3;
+  robot_marker.scale.y = 0.3;
+  robot_marker.scale.z = 0.05;
+  robot_marker.color.r = 1.0;
+  robot_marker.color.g = 1.0;
+  robot_marker.color.b = 0.0;
+  robot_marker.color.a = 1.0;
+
+  // use best particle (highest weight) to position robot
+  auto best = std::max_element(particles.begin(), particles.end(), [](const Particle& a, const Particle& b) {
+    return a.weight < b.weight;
+  });
+  if (best != particles.end()) {
+    robot_marker.pose.position.x = best->x;
+    robot_marker.pose.position.y = best->y;
+    robot_marker.pose.position.z = 0.01;
+    robot_marker.pose.orientation.w = 1.0;
+  }
+  marker_pub.publish(robot_marker);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 double getTranslationTicks(double distance) {
     return ticksPerRevolution * distance / (2 * M_PI * radius);
 }
@@ -87,18 +198,15 @@ double getRotationFromTicks(double leftTicks, double rightTicks) {
     return (2 * M_PI * WHEEL_RADIUS_M) * (tick_diff / 5.5) / TRACK_WIDTH_M;  
 }
 
-void resetEncoders(ros::ServiceClient& resetClient) {
+void resetEncoders() {
+    ROS_INFO("Resetting the encoders");
     create_fundamentals::ResetEncoders srv;
-    if (!resetClient.call(srv)) {
-        ROS_WARN("Failed to reset encoders");
-    } else {
+    if(reset_encoders_client->call(srv)) {
         leftTicks = 0;
         rightTicks = 0;
     }
 }
 
-// Global particle set
-std::vector<Particle> particles;
 
 void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
     if (!map) {
@@ -283,10 +391,6 @@ void updateParticlesMotion(double x_bar, double y_bar, double theta_bar,
         while (normalized_theta < 0) normalized_theta += 2 * M_PI;
         p.orientation = static_cast<int>((normalized_theta + M_PI/4) / (M_PI/2)) % 4;
     }
-
-    // Log motion update for visualization
-    data_log << ros::Time::now() << ",motion_update_odometry," << x_bar << "," << y_bar << "," << theta_bar << ","
-             << x_bar_prime << "," << y_bar_prime << "," << theta_bar_prime << std::endl;
 }
 
 
@@ -480,7 +584,7 @@ plastic_fundamentals::Pose estimatePose() {
     return pose;
 }
 
-void spinInPlace(ros::ServiceClient& diffDriveClient, ros::ServiceClient& resetClient, double angle_rad, double speed) {
+void spinInPlace(ros::ServiceClient& diffDriveClient, double angle_rad, double speed) {
     double direction = (angle_rad >= 0) ? 1.0 : -1.0;
     double ticksTarget = getRotationTicks(angle_rad);
 
@@ -488,7 +592,7 @@ void spinInPlace(ros::ServiceClient& diffDriveClient, ros::ServiceClient& resetC
     double y_bar_before = y_bar;
     double theta_bar_before = theta_bar;
 
-    resetEncoders(resetClient);
+    resetEncoders();
 
     create_fundamentals::DiffDrive srv;
     ros::Rate rate(10);
@@ -530,17 +634,19 @@ void spinInPlace(ros::ServiceClient& diffDriveClient, ros::ServiceClient& resetC
     y_bar = y_bar_after;
     theta_bar = theta_bar_after;
 
-    resetEncoders(resetClient);
+    resetEncoders();
 }
 
 bool isClearPath(const std::vector<double>& actual_scan, double obstacle_threshold) {
-    double min_angle = -M_PI / 4;
-    double max_angle = M_PI / 4;
+    double min_angle = -M_PI * 2 / 3;
+    double max_angle = M_PI * 2 / 3;
 
     double angle_resolution = (max_angle - min_angle) / actual_scan.size();
 
-    size_t left_index = static_cast<size_t>((-M_PI / 2 - min_angle) / angle_resolution);
-    size_t right_index = static_cast<size_t>((M_PI / 2 - min_angle) / angle_resolution);
+    double check_angle_range = M_PI / 6;
+
+    size_t left_index = static_cast<size_t>((-check_angle_range - min_angle) / angle_resolution);
+    size_t right_index = static_cast<size_t>((check_angle_range - min_angle) / angle_resolution);
 
     left_index = std::max(left_index, static_cast<size_t>(0));
     right_index = std::min(right_index, actual_scan.size() - 1);
@@ -551,11 +657,10 @@ bool isClearPath(const std::vector<double>& actual_scan, double obstacle_thresho
             return false;
         }
     }
-
     return true;
 }
 
-void moveLinear(ros::ServiceClient& diffDriveClient, ros::ServiceClient& resetClient, double distance_m, double speed) {
+void moveLinear(ros::ServiceClient& diffDriveClient, double distance_m, double speed) {
     double direction = (distance_m >= 0) ? 1.0 : -1.0;
     double ticksTarget = getTranslationTicks(distance_m);
 
@@ -564,7 +669,7 @@ void moveLinear(ros::ServiceClient& diffDriveClient, ros::ServiceClient& resetCl
     double y_bar_before = y_bar;
     double theta_bar_before = theta_bar;
 
-    resetEncoders(resetClient);
+    resetEncoders();
 
     create_fundamentals::DiffDrive srv;
     ros::Rate rate(10);
@@ -603,7 +708,7 @@ void moveLinear(ros::ServiceClient& diffDriveClient, ros::ServiceClient& resetCl
     y_bar = y_bar_after;
     theta_bar = theta_bar_after;
 
-    resetEncoders(resetClient);
+    resetEncoders();
 }
 
 void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
@@ -696,7 +801,12 @@ int main(int argc, char** argv) {
     
     ros::ServiceClient client = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     diff_drive_client = &client;
-    
+
+    ros::ServiceClient resetEncoders = nh.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
+    reset_encoders_client = &resetEncoders;
+
+    marker_pub = nh.advertise<visualization_msgs::Marker>("/lines", 10);
+
     ROS_INFO("MCL localization node started");
 
 

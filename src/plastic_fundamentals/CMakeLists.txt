@@ -83,3 +83,7 @@ add_dependencies(execute_smooth_plan_server create_fundamentals_generate_message
 add_executable(mcl_localization src/mcl_localization.cpp)
 target_link_libraries(mcl_localization ${catkin_LIBRARIES})
 add_dependencies(mcl_localization create_fundamentals_generate_messages_cpp)
+
+add_executable(mcl_updated src/mcl_updated.cpp)
+target_link_libraries(mcl_updated ${catkin_LIBRARIES})
+add_dependencies(mcl_updated create_fundamentals_generate_messages_cpp)
