@@ -632,27 +632,29 @@ void spinInPlace(ros::ServiceClient& diffDriveClient, double angle_rad, double s
     resetEncoders();
 }
 
-bool isClearPath(const std::vector<double>& actual_scan, double obstacle_threshold) {
-    double min_angle = -M_PI * 2 / 3;
-    double max_angle = M_PI * 2 / 3;
-
-    double angle_resolution = (max_angle - min_angle) / actual_scan.size();
-
-    double check_angle_range = M_PI / 6;
-
-    size_t left_index = static_cast<size_t>((-check_angle_range - min_angle) / angle_resolution);
-    size_t right_index = static_cast<size_t>((check_angle_range - min_angle) / angle_resolution);
-
-    left_index = std::max(left_index, static_cast<size_t>(0));
-    right_index = std::min(right_index, actual_scan.size() - 1);
-
-    for (size_t i = left_index; i <= right_index; ++i) {
-        double distance = actual_scan[i];
-        if (distance < obstacle_threshold) {
-            return false;
-        }
+bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& scan, double obstacle_threshold) {
+    // Check only the center reading (0° directly in front of the robot)
+    int center_index = static_cast<int>((0.0 - scan->angle_min) / scan->angle_increment);
+    
+    // Validate index bounds
+    if (center_index < 0 || center_index >= scan->ranges.size()) {
+        ROS_WARN("Invalid center index for laser scan!");
+        return false;
     }
-    return true;
+
+    // Get the center distance reading
+    float center_distance = scan->ranges[center_index];
+
+    // Check if reading is valid and clear
+    if (std::isnan(center_distance) {
+        return false;  // Invalid reading
+    }
+    if (center_distance < scan->range_min || center_distance > scan->range_max) {
+        return false;  // Out of sensor range
+    }
+
+    // Compare against obstacle threshold
+    return (center_distance >= obstacle_threshold);
 }
 
 void moveLinear(ros::ServiceClient& diffDriveClient, double distance_m, double speed) {
