@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 import os
 import rospy
 from time import sleep
@@ -11,7 +11,7 @@ L = Cell.LEFT
 R = Cell.RIGHT
 
 rospack = rospkg.RosPack()
-filename = os.path.join(rospack.get_path("plastic_fundamentals"), "map.txt")
+filename = os.path.join(rospack.get_path("plastic_fundamentals") + "/src", "map.txt")
 with open(filename, 'r') as f:
     exec("map_layout = {}".format(f.read()))
 

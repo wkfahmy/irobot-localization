@@ -1,0 +1,8 @@
+string marker_type
+
+Point[] points
+Line[] lines
+Point robot
+---
+
+bool success

@@ -56,7 +56,7 @@ ros::Publisher marker_pub;
 
 std::default_random_engine random_generator;
 
-std::vector<double> actual_scan;
+const sensor_msgs::LaserScan::ConstPtr actual_scan;
 
 enum LocalizationPhase {
     SPIN,
@@ -646,7 +646,7 @@ bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& scan, double obstacle_t
     float center_distance = scan->ranges[center_index];
 
     // Check if reading is valid and clear
-    if (std::isnan(center_distance) {
+    if (std::isnan(center_distance)) {
         return false;  // Invalid reading
     }
     if (center_distance < scan->range_min || center_distance > scan->range_max) {
@@ -718,7 +718,7 @@ void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    actual_scan = std::vector<double>(msg->ranges.begin(), msg->ranges.end());
+    //actual_scan = &msg;
 
     if (processing_done) return;
     if (!map_data || particles.empty()) return;

@@ -35,10 +35,14 @@ add_message_files(FILES
     Grid.msg
     Pose.msg
     Row.msg
+
+    Line.msg
+    Point.msg
 )
 #uncomment if you have defined services
 add_service_files(FILES
     ExecutePlan.srv
+    PublishMarker.srv
 )
 
 #common commands for building c++ executables and libraries
@@ -87,3 +91,15 @@ add_dependencies(mcl_localization create_fundamentals_generate_messages_cpp)
 add_executable(mcl_updated src/mcl_updated.cpp)
 target_link_libraries(mcl_updated ${catkin_LIBRARIES})
 add_dependencies(mcl_updated create_fundamentals_generate_messages_cpp)
+
+add_executable(marker_relay src/marker_relay.cpp)
+target_link_libraries(marker_relay ${catkin_LIBRARIES})
+add_dependencies(marker_relay create_fundamentals_generate_messages_cpp)
+
+add_executable(marker_test src/marker_test.cpp)
+target_link_libraries(marker_test ${catkin_LIBRARIES})
+add_dependencies(marker_test create_fundamentals_generate_messages_cpp)
+
+add_executable(simulator src/simulator.cpp)
+target_link_libraries(simulator ${catkin_LIBRARIES})
+add_dependencies(simulator create_fundamentals_generate_messages_cpp)
