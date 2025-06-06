@@ -141,8 +141,8 @@ void getMapLines(const plastic_fundamentals::Grid::ConstPtr& msg) {
     for (int i = 0; i < rows; ++i) {
         for (int j = 0; j < cols; ++j) {
             const auto& cell = msg->rows[i].cells[j];
-            double x = j * CELL_SIZE;
-            double y = i * CELL_SIZE;
+            double x = i * CELL_SIZE;
+            double y = j * CELL_SIZE;
 
             if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::RIGHT) != cell.walls.end()) {
                 plastic_fundamentals::Line line;

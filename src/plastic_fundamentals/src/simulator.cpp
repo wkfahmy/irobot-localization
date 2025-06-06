@@ -12,7 +12,7 @@ class RobotSimulator {
 public:
     RobotSimulator(const ros::NodeHandle& nh, const plastic_fundamentals::Grid::ConstPtr& map_data,
                        double start_x, double start_y, double start_theta)
-        : nh_(nh), map_data_(map_data), robot_x_(start_x), robot_y_(start_y), robot_theta_(start_theta),
+        : nh_(nh), map_data_(map_data), robot_x_(start_x), robot_y_(start_y), robot_theta_(start_theta + M_PI),
           left_speed_(0), right_speed_(0), encoder_left_(0), encoder_right_(0), line_segments_(preprocessMap(map_data_)) {
         lidar_pub_ = nh_.advertise<sensor_msgs::LaserScan>("scan_filtered", 1);
         diff_drive_service_ = nh_.advertiseService("diff_drive", &RobotSimulator::diffDriveCallback, this);
@@ -26,17 +26,16 @@ public:
         scan.header.stamp = ros::Time::now();
         scan.header.frame_id = "map";
 
-        scan.angle_min = -M_PI * 2/ 3;
-        scan.angle_max = M_PI * 2/ 3;
-        scan.angle_increment = M_PI / 30;
+        scan.angle_min = -M_PI * 2 / 3; // -120 degrees
+        scan.angle_max = M_PI * 2 / 3; // 120 degrees
+        scan.angle_increment = M_PI / 60;
         scan.range_min = 0.0;
         scan.range_max = 1.0;
 
         int num_ranges = static_cast<int>((scan.angle_max - scan.angle_min) / scan.angle_increment);
         scan.ranges.resize(num_ranges);
 
-        plastic_fundamentals::PublishMarker srv;
-        srv.request.marker_type = "RayMarker";
+
         std::vector<plastic_fundamentals::Line> lines;
 
         double lidar_origin_x = robot_x_ + LIDAR_OFFSET_M * cos(robot_theta_);
@@ -57,11 +56,12 @@ public:
             line.y2 = end_y;
 
             lines.push_back(line);
-
-
         }
 
         lidar_pub_.publish(scan);
+
+        plastic_fundamentals::PublishMarker srv;
+        srv.request.marker_type = "RayMarker";
 
         srv.request.lines = lines;
         if (!client.call(srv)) {
@@ -90,10 +90,8 @@ public:
             return;
         }
 
-        // Compute the linear velocity (average of the left and right wheel velocities)
         double linear_velocity = (left_speed_ + right_speed_) / 2.0;
 
-        // Compute the angular velocity (difference of left and right wheel velocities divided by track width)
         double angular_velocity = (right_speed_ - left_speed_) / TRACK_WIDTH_M;
 
         double delta_theta = angular_velocity * dt;
@@ -136,16 +134,15 @@ public:
 private:
 
     bool checkIntersection(const plastic_fundamentals::Line& ray, const plastic_fundamentals::Line& segment, double& intersect_x, double& intersect_y) {
-        double det = (ray.x2 - ray.x1) * (segment.y2 - segment.y1) - (ray.y2 - ray.y1) * (segment.x2 - segment.x1);
+        double det = (ray.x1 - ray.x2) * (segment.y1 - segment.y2) - (ray.y1 - ray.y2) * (segment.x1 - segment.x2);
 
-        const double epsilon = 1e-6;  // A small value to avoid numerical issues
+        const double epsilon = 1e-6;
         if (std::fabs(det) < epsilon) {
-            return false;  // Lines are parallel or coincident
+            return false;
         }
 
-        // Calculate the intersection point using the parametric form of the lines
-        double t = ((ray.x1 - segment.x1) * (segment.y2 - segment.y1) - (ray.y1 - segment.y1) * (segment.x2 - segment.x1)) / det;
-        double s = ((ray.x1 - segment.x1) * (ray.y2 - ray.y1) - (ray.y1 - segment.y1) * (ray.x2 - ray.x1)) / det;
+        double t = ((ray.x1 - segment.x1) * (segment.y1 - segment.y2) - (ray.y1 - segment.y1) * (segment.x1 - segment.x2)) / det;
+        double s = ((ray.x1 - segment.x1) * (ray.y1 - ray.y2) - (ray.y1 - segment.y1) * (ray.x1 - ray.x2)) / det;
 
         if (t >= 0 && s >= 0 && s <= 1) {
             intersect_x = ray.x1 + t * (ray.x2 - ray.x1);
@@ -170,8 +167,6 @@ private:
         double closest_intersect_x, closest_intersect_y;
 
         for (const auto& wall : line_segments_) {
-            ROS_INFO("Checking intersection with wall from (%f, %f) to (%f, %f)", wall.x1, wall.y1, wall.x2, wall.y2);
-
             double intersect_x, intersect_y;
             if (checkIntersection(ray, wall, intersect_x, intersect_y)) {
                 double distance = std::sqrt(std::pow(intersect_x - lidar_origin_x, 2) + std::pow(intersect_y - lidar_origin_y, 2));
@@ -193,11 +188,19 @@ private:
         for (int i = 0; i < rows; ++i) {
             for (int j = 0; j < cols; ++j) {
                 const auto& cell = msg->rows[i].cells[j];
-                double x = j * CELL_SIZE;
-                double y = i * CELL_SIZE;
+                double x = i * CELL_SIZE;
+                double y = j * CELL_SIZE;
 
-                // Vertical wall (RIGHT)
-                if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::RIGHT) != cell.walls.end()) {
+                if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::LEFT) != cell.walls.end()) {
+                    plastic_fundamentals::Line line;
+                    line.x1 = x;
+                    line.y1 = y;
+                    line.x2 = x + CELL_SIZE;
+                    line.y2 = y;
+                    line_segments.push_back(line);
+                }
+
+                if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::BOTTOM) != cell.walls.end()) {
                     plastic_fundamentals::Line line;
                     line.x1 = x + CELL_SIZE;
                     line.y1 = y;
@@ -206,32 +209,20 @@ private:
                     line_segments.push_back(line);
                 }
 
-                // Horizontal wall (TOP)
+                if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::RIGHT) != cell.walls.end()) {
+                    plastic_fundamentals::Line line;
+                    line.x1 = x;
+                    line.y1 = y + CELL_SIZE;
+                    line.x2 = x + CELL_SIZE;
+                    line.y2 = y + CELL_SIZE;
+                    line_segments.push_back(line);
+                }
+
                 if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::TOP) != cell.walls.end()) {
                     plastic_fundamentals::Line line;
                     line.x1 = x;
                     line.y1 = y;
-                    line.x2 = x + CELL_SIZE;
-                    line.y2 = y;
-                    line_segments.push_back(line);
-                }
-
-                // Vertical wall (LEFT)
-                if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::LEFT) != cell.walls.end()) {
-                    plastic_fundamentals::Line line;
-                    line.x1 = x;
-                    line.y1 = y + CELL_SIZE;
                     line.x2 = x;
-                    line.y2 = y;
-                    line_segments.push_back(line);
-                }
-
-                // Horizontal wall (BOTTOM)
-                if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::BOTTOM) != cell.walls.end()) {
-                    plastic_fundamentals::Line line;
-                    line.x1 = x;
-                    line.y1 = y + CELL_SIZE;
-                    line.x2 = x + CELL_SIZE;
                     line.y2 = y + CELL_SIZE;
                     line_segments.push_back(line);
                 }
@@ -298,7 +289,7 @@ int main(int argc, char** argv) {
 
     double cell_size = 0.8;
 
-    int x = -2;
+    int x = 0;
     int y = 0;
 
     double initial_x = x * cell_size + 0.4;
@@ -309,7 +300,7 @@ int main(int argc, char** argv) {
 
     ros::Rate loop_rate(100);
     while (ros::ok()) {
-        double dt = 1.0 / loop_rate.expectedCycleTime().toSec();  // Time difference between updates
+        double dt = loop_rate.expectedCycleTime().toSec();  // Time difference between updates
 
         robot.updatePose(dt);
         robot.simulateLidar();
