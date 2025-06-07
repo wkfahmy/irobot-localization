@@ -270,7 +270,6 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         }
     }
 
-
     if (!perpendicular_lines.empty()) {
 		ROS_INFO("Found an intersection point %f %f", intersectionPoint.x, intersectionPoint.y);
 		ROS_INFO("Intersection (robot frame): x = %.3f, y = %.3f, distance = %.3f",
@@ -311,7 +310,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 		}
     }
     else {
-        spinInPlace(*diff_drive_client, 2 * M_PI / 3, 5.0); // Turn 180 degrees if no lines found
+        spinInPlace(*diff_drive_client, 2 * M_PI / 6, 5.0); // Turn 180 degrees if no lines found
     	ros::Duration(0.5).sleep();
     }
 }

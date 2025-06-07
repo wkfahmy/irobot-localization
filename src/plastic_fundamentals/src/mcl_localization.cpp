@@ -8,6 +8,7 @@
 #include <plastic_fundamentals/Row.h>
 #include <plastic_fundamentals/Cell.h>
 #include <plastic_fundamentals/Pose.h>
+#include <plastic_fundamentals/ExecutePlan.h>
 #include <visualization_msgs/MarkerArray.h>
 #include <tf/transform_broadcaster.h>
 #include <std_msgs/String.h>
@@ -33,10 +34,26 @@ constexpr double THETA_MOTION_NOISE = 0.1;
 constexpr double XY_RESAMPLE_NOISE = 0.1;
 constexpr double THETA_RESAMPLE_NOISE = 0.2;
 
-constexpr double RESAMPLE_THRESHOLD = 0.5;
+constexpr double RESAMPLE_THRESHOLD = 0.4;
 
 double leftTicks = 0;
 double rightTicks = 0;
+
+enum LocalizationPhase {
+    SPIN,
+    MOVE
+};
+
+
+// Particle structure
+struct Particle {
+    double x;
+    double y;
+    double theta;
+    double weight;
+    int row;            // Grid row
+    int col;            // Grid column
+};
 
 
 ros::ServiceClient* resetEncodersClient;
@@ -44,9 +61,9 @@ ros::ServiceClient* resetEncodersClient;
 create_fundamentals::DiffDrive diffDriveSrv;
 ros::ServiceClient* diffDriveClient;
 plastic_fundamentals::Grid::ConstPtr map_data;
-plastic_fundamentals::Pose current_pose;
+Particle current_pose;
 
-ros::ServiceClient client;
+ros::ServiceClient marker;
 
 
 bool is_localized = false;
@@ -64,39 +81,17 @@ sensor_msgs::LaserScan::ConstPtr actual_scan;
 
 std::vector<plastic_fundamentals::Line> map_lines;
 
-enum LocalizationPhase {
-    SPIN,
-    MOVE
-};
-
-
-// Particle structure
-struct Particle {
-    double x;
-    double y;
-    double theta;
-    double weight;
-    int row;            // Grid row
-    int col;            // Grid column
-    int orientation;    // Grid orientation (0-3)
-};
-
-void resetEncoders() {
-    ROS_INFO("Resetting the encoders");
-    create_fundamentals::ResetEncoders srv;
-    if(resetEncodersClient->call(srv)) {
-        leftTicks = 0;
-        rightTicks = 0;
-    }
-}
-
-void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
-{
-    leftTicks = msg->encoderLeft;
-    rightTicks = msg->encoderRight;
-}
-
 std::vector<Particle> particles;
+
+int angleToDirection(double angle_rad) {
+    double angle = angle_rad - M_PI/2;
+
+    while (angle < 0) angle += 2*M_PI;
+    while (angle >= 2*M_PI) angle -= 2*M_PI;
+
+    int dir = static_cast<int>(std::floor((angle + M_PI/4) / (M_PI/2))) % 4;
+    return dir;
+}
 
 void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
     if (!map) {
@@ -135,8 +130,7 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
                     p.weight = 1.0 / NUM_PARTICLES;
                     p.row = row;
                     p.col = col;
-                    p.orientation = orientation;
-                    
+
                     particles.push_back(p);
                 }
             }
@@ -162,10 +156,51 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
         srv.request.points.push_back(pt);
     }
 
-    if (!client.call(srv)) {
+    if (!marker.call(srv)) {
         ROS_ERROR("Failed to call service marker_service");
     }
 
+}
+
+void updateParticlesMotion(double distance, double angle) {
+    double dist_stddev = std::abs(distance) * XY_MOTION_NOISE;
+    double angle_stddev = std::abs(angle) * THETA_MOTION_NOISE;
+
+    std::normal_distribution<double> translation_noise(0, dist_stddev);
+    std::normal_distribution<double> rotation_noise(0, angle_stddev);
+
+    plastic_fundamentals::PublishMarker srv;
+
+    srv.request.marker_type = "PointMarker";
+
+    for (auto& p : particles) {
+        if (distance != 0) {
+            double distance_noise = distance + translation_noise(random_generator);
+            p.x += distance_noise * std::cos(p.theta);
+            p.y += distance_noise * std::sin(p.theta);
+        }
+
+        if (angle != 0) {
+            p.theta += angle + rotation_noise(random_generator);
+        }
+
+        while (p.theta > M_PI) p.theta -= 2 * M_PI;
+        while (p.theta <= -M_PI) p.theta += 2 * M_PI;
+
+        p.col = static_cast<int>(p.y / CELL_SIZE);
+        p.row = static_cast<int>(p.x / CELL_SIZE);
+
+        plastic_fundamentals::Point pt;
+        pt.x = p.x;
+        pt.y = p.y;
+        pt.w = p.theta;
+
+        srv.request.points.push_back(pt);
+    }
+
+    if (!marker.call(srv)) {
+        ROS_ERROR("Failed to call service marker_service");
+    }
 }
 
 void normalizeWeights() {
@@ -264,52 +299,7 @@ void resampleParticles() {
         srv.request.points.push_back(pt);
     }
 
-    if (!client.call(srv)) {
-        ROS_ERROR("Failed to call service marker_service");
-    }
-}
-
-void updateParticlesMotion(double distance, double angle) {
-    double dist_stddev = std::abs(distance) * XY_MOTION_NOISE;
-    double angle_stddev = std::abs(angle) * THETA_MOTION_NOISE;
-
-    std::normal_distribution<double> translation_noise(0, dist_stddev);
-    std::normal_distribution<double> rotation_noise(0, angle_stddev);
-
-    plastic_fundamentals::PublishMarker srv;
-
-    srv.request.marker_type = "PointMarker";
-
-    for (auto& p : particles) {
-        if (distance != 0) {
-            double distance_noise = distance + translation_noise(random_generator);
-            p.x += distance_noise * std::cos(p.theta);
-            p.y += distance_noise * std::sin(p.theta);
-        }
-
-        if (angle != 0) {
-            p.theta += angle + rotation_noise(random_generator);
-        }
-
-        while (p.theta > M_PI) p.theta -= 2 * M_PI;
-        while (p.theta <= -M_PI) p.theta += 2 * M_PI;
-        
-        p.col = static_cast<int>(p.y / CELL_SIZE);
-        p.row = static_cast<int>(p.x / CELL_SIZE);
-        
-        double normalized_theta = p.theta;
-        while (normalized_theta < 0) normalized_theta += 2 * M_PI;
-        p.orientation = static_cast<int>(normalized_theta / (M_PI/2)) % 4;
-
-        plastic_fundamentals::Point pt;
-        pt.x = p.x;
-        pt.y = p.y;
-        pt.w = p.theta;
-
-        srv.request.points.push_back(pt);
-    }
-
-    if (!client.call(srv)) {
+    if (!marker.call(srv)) {
         ROS_ERROR("Failed to call service marker_service");
     }
 }
@@ -492,8 +482,8 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
     normalizeWeights();
 }
 
-plastic_fundamentals::Pose estimatePose() {
-    plastic_fundamentals::Pose pose;
+Particle estimatePose() {
+    Particle pose;
     
     auto max_it = std::max_element(particles.begin(), particles.end(),
                                   [](const Particle& a, const Particle& b) {
@@ -501,9 +491,11 @@ plastic_fundamentals::Pose estimatePose() {
                                   });
     
     if (max_it != particles.end()) {
+        pose.x = max_it->x;
+        pose.y = max_it->y;
+        pose.theta = max_it->theta;
         pose.row = max_it->row;
-        pose.column = max_it->col;
-        pose.orientation = max_it->orientation;
+        pose.col = max_it->col;
     } else {
         double sum_x = 0, sum_y = 0;
         double sum_sin_theta = 0, sum_cos_theta = 0;
@@ -521,17 +513,70 @@ plastic_fundamentals::Pose estimatePose() {
             double avg_x = sum_x / sum_weights;
             double avg_y = sum_y / sum_weights;
             double avg_theta = atan2(sum_sin_theta, sum_cos_theta);
-            
-            pose.row = static_cast<int>(avg_x / CELL_SIZE);
-            pose.column = static_cast<int>(avg_y / CELL_SIZE);
-            
             double normalized_theta = avg_theta;
             while (normalized_theta < 0) normalized_theta += 2 * M_PI;
-            pose.orientation = static_cast<int>(normalized_theta / (M_PI/2)) % 4;
+
+            pose.x = avg_x;
+            pose.y = avg_y;
+            pose.theta = normalized_theta;
+
+            pose.row = static_cast<int>(avg_x / CELL_SIZE);
+            pose.col = static_cast<int>(avg_y / CELL_SIZE);
         }
     }
     
     return pose;
+}
+
+double absEncoderLeft = 0.0;
+double absEncoderRight = 0.0;
+
+double lastLeftTicks = 0.0;
+double lastRightTicks = 0.0;
+
+bool skipNextSensorCallback = false;
+
+void resetEncoders() {
+    ROS_INFO("Resetting the encoders");
+    create_fundamentals::ResetEncoders srv;
+    if(resetEncodersClient->call(srv)) {
+        absEncoderLeft += leftTicks;
+        absEncoderRight += rightTicks;
+
+        leftTicks = 0;
+        rightTicks = 0;
+
+        lastLeftTicks  = absEncoderLeft;
+        lastRightTicks = absEncoderRight;
+    }
+}
+
+
+
+void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
+{
+    leftTicks = msg->encoderLeft;
+    rightTicks = msg->encoderRight;
+
+    double delta_left = (absEncoderLeft + leftTicks) - lastLeftTicks;
+    double delta_right = (absEncoderRight + rightTicks) - lastRightTicks;
+
+    if (delta_left == 0.0 && delta_right == 0.0 || fabs(delta_left) > 6.0 && fabs(delta_right) > 6.0) {
+        return;
+    }
+
+    lastLeftTicks = absEncoderLeft + leftTicks;
+    lastRightTicks = absEncoderRight + rightTicks;
+
+    ROS_INFO("Delta Left: %f, Delta Right: %f", delta_left, delta_right);
+
+    double d_left = delta_left * (2 * M_PI * WHEEL_RADIUS_M) / 6.0;
+    double d_right = delta_right * (2 * M_PI * WHEEL_RADIUS_M) / 6.0;
+
+    double d = (d_left + d_right) / 2.0;
+    double dtheta = (d_right - d_left) / TRACK_WIDTH_M;
+
+    updateParticlesMotion(d, dtheta);
 }
 
 double getRotationTicks(double angle_rad) {
@@ -551,10 +596,7 @@ double getTranslationTicks(double distance) {
 void rotate(double angle_rad, double speed) {
     ROS_INFO("Rotation: %f", angle_rad);
 
-    double ticks = getRotationTicks(angle_rad);
-
-    resetEncoders();
-    ros::spinOnce();
+    double ticks = getRotationTicks(fabs(angle_rad));
 
     double side = (angle_rad > 0) ? 1.0 : -1.0;
 
@@ -562,6 +604,8 @@ void rotate(double angle_rad, double speed) {
     diffDriveSrv.request.right = side * speed;
 
     ros::Rate rate(100);
+
+    resetEncoders();
     ros::spinOnce();
 
     double last_left_ticks = 0.0;
@@ -585,12 +629,6 @@ void rotate(double angle_rad, double speed) {
 
         diffDriveClient->call(diffDriveSrv);
 
-        double delta_left = leftTicks - last_left_ticks;
-        double delta_right = rightTicks - last_right_ticks;
-        double delta_ticks = (std::abs(delta_left) + std::abs(delta_right)) / 2.0;
-        double incremental_rotation = (delta_ticks / ticks) * angle_rad;
-        updateParticlesMotion(0.0, incremental_rotation);
-
         last_left_ticks = leftTicks;
         last_right_ticks = rightTicks;
 
@@ -602,12 +640,6 @@ void rotate(double angle_rad, double speed) {
     diffDriveSrv.request.right = 0;
     diffDriveClient->call(diffDriveSrv);
 
-    double delta_left = leftTicks - last_left_ticks;
-    double delta_right = rightTicks - last_right_ticks;
-    double delta_ticks = (delta_left + delta_right) / 2.0;
-    double incremental_rotation = (delta_ticks / ticks) * angle_rad;
-    updateParticlesMotion(0.0, incremental_rotation);
-
     resetEncoders();
 }
 
@@ -617,14 +649,12 @@ void translate(double distance, double speed) {
 
     double ticks = getTranslationTicks(distance);
 
-    resetEncoders();
-    ros::spinOnce();
-
     double side = (distance > 0) ? 1.0 : -1.0;
     diffDriveSrv.request.left = side * speed;
     diffDriveSrv.request.right = side * speed;
 
-    ros::Rate rate(10);
+    ros::Rate rate(100);
+    resetEncoders();
     ros::spinOnce();
 
     double last_left_ticks = 0.0;
@@ -648,12 +678,6 @@ void translate(double distance, double speed) {
 
         diffDriveClient->call(diffDriveSrv);
 
-        double delta_left = leftTicks - last_left_ticks;
-        double delta_right = rightTicks - last_right_ticks;
-        double delta_ticks = (delta_left + delta_right) / 2.0;
-        double incremental_distance = (delta_ticks / ticks) * distance;
-        updateParticlesMotion(incremental_distance, 0.0);
-
         last_left_ticks = leftTicks;
         last_right_ticks = rightTicks;
 
@@ -665,11 +689,64 @@ void translate(double distance, double speed) {
     diffDriveSrv.request.right = 0;
     diffDriveClient->call(diffDriveSrv);
 
-    double delta_left = leftTicks - last_left_ticks;
-    double delta_right = rightTicks - last_right_ticks;
-    double incremental_distance = side * (delta_left + delta_right) / 2.0 * WHEEL_RADIUS_M;
+    resetEncoders();
+}
 
-    updateParticlesMotion(incremental_distance, 0.0);
+void driveArc(double angle_rad, double arc_radius, double speed) {
+    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
+    double ticks_per_revolution = 6;
+    double b = TRACK_WIDTH_M;
+
+    double abs_angle = std::abs(angle_rad);
+
+    double side = (angle_rad > 0) ? 1.0 : -1.0;
+
+    double d_left  = (arc_radius - side * b / 2.0) * abs_angle;
+    double d_right = (arc_radius + side * b / 2.0) * abs_angle;
+
+    double ticks_left  = (d_left  / wheel_circumference) * ticks_per_revolution;
+    double ticks_right = (d_right / wheel_circumference) * ticks_per_revolution;
+
+    double v_left, v_right;
+    if (angle_rad > 0) {
+        v_left  = speed * (d_left / d_right);
+        v_right = speed;
+    } else if (angle_rad < 0) {
+        v_left  = speed;
+        v_right = speed * (d_right / d_left);
+    } else {
+        ROS_WARN("driveArc called with angle_rad = 0, nothing to do!");
+        return;
+    }
+
+    resetEncoders();
+    ros::spinOnce();
+
+    diffDriveSrv.request.left  = v_left;
+    diffDriveSrv.request.right = v_right;
+    diffDriveClient->call(diffDriveSrv);
+
+    ros::Rate rate(100);
+
+    double last_left_ticks = 0.0;
+    double last_right_ticks = 0.0;
+
+    while ((fabs(leftTicks) < fabs(ticks_left)) || (fabs(rightTicks) < fabs(ticks_right))) {
+
+        diffDriveSrv.request.left  = v_left;
+        diffDriveSrv.request.right = v_right;
+        diffDriveClient->call(diffDriveSrv);
+
+        last_left_ticks = leftTicks;
+        last_right_ticks = rightTicks;
+
+        rate.sleep();
+        ros::spinOnce();
+    }
+
+    diffDriveSrv.request.left = 0;
+    diffDriveSrv.request.right = 0;
+    diffDriveClient->call(diffDriveSrv);
 
     resetEncoders();
 }
@@ -696,6 +773,93 @@ bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_th
         return false;
     }
 
+    return true;
+}
+
+void rotate_to(double target_theta, double speed) {
+    double tolerance = 0.05;
+    ros::Rate rate(100);
+    int max_iter = 3;
+
+    double angle_diff = target_theta - current_pose.theta;
+    double prev_angle_diff = angle_diff;
+
+    for (int i = 0; i < max_iter; ++i) {
+        angle_diff = target_theta - current_pose.theta;
+        while (angle_diff > M_PI) angle_diff -= 2*M_PI;
+        while (angle_diff < -M_PI) angle_diff += 2*M_PI;
+
+        if (std::abs(angle_diff) < tolerance) break;
+
+        rotate(angle_diff, speed);
+        ros::spinOnce();
+        rate.sleep();
+    }
+}
+
+void translate_to(double target_x, double target_y, double speed) {
+    double tolerance = 0.03;
+    ros::Rate rate(100);
+    int max_iter = 3;
+
+    for (int i = 0; i < max_iter; ++i) {
+        double dx = target_x - current_pose.x;
+        double dy = target_y - current_pose.y;
+        double distance = std::hypot(dx, dy);
+
+        ROS_INFO("Target: (%.3f, %.3f) | Current: (%.3f, %.3f) | d=%.3f",
+                 target_x, target_y, current_pose.x, current_pose.y, distance);
+        if (distance < tolerance) break;
+
+        double theta_to_target = std::atan2(dy, dx);
+        rotate_to(theta_to_target, speed);
+
+        translate(distance, speed);
+        ros::spinOnce();
+        rate.sleep();
+    }
+}
+
+bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundamentals::ExecutePlan::Response &res) {
+    int grid_x = current_pose.row;
+    int grid_y = current_pose.col;
+    double theta = current_pose.theta;
+
+    for(size_t idx = 0; idx < req.plan.size(); ++idx) {
+        int dir = req.plan[idx];
+
+        int target_grid_x = grid_x;
+        int target_grid_y = grid_y;
+        double target_theta = 0.0;
+
+        if (dir == 0) {
+            target_grid_y += 1;
+            target_theta = M_PI_2;
+        } else if (dir == 1) {
+            target_grid_x -= 1;
+            target_theta = M_PI;
+        } else if (dir == 2) {
+            target_grid_y -= 1;
+            target_theta = -M_PI_2;
+        } else if (dir == 3) {
+            target_grid_x += 1;
+            target_theta = 0.0;
+        }
+
+        double target_x = target_grid_x * CELL_SIZE + 0.4;
+        double target_y = target_grid_y * CELL_SIZE + 0.4;
+
+
+        rotate_to(target_theta, 5.0);
+
+        translate_to(target_x, target_y, 8.0);
+
+        grid_x = target_grid_x;
+        grid_y = target_grid_y;
+        theta = target_theta;
+    }
+
+    res.success = true;
     return true;
 }
 
@@ -732,6 +896,8 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     double mean_x = 0, mean_y = 0, mean_theta = 0;
     double max_weight = 0;
+    double total_weight = 0.0;
+
     for (const auto& p : particles) {
         mean_x += p.x;
         mean_y += p.y;
@@ -748,8 +914,11 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         var_theta += pow(p.theta - mean_theta, 2);
 
         max_weight = std::max(max_weight, p.weight);
+        total_weight += p.weight;
 
     }
+    double avg_weight = total_weight / particles.size();
+
     var_x /= particles.size();
     var_y /= particles.size();
     var_theta /= particles.size();
@@ -760,15 +929,29 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     if (stddev_x < 0.05 && stddev_y < 0.05 && stddev_theta < 0.05 && n_eff > effective_particles_threshold) {
         is_localized = true;
-        ROS_INFO("Localized at row=%d, column=%d, orientation=%d (confidence=%.3f)",
-                 current_pose.row, current_pose.column, current_pose.orientation, max_weight);
 
-        pose_pub.publish(current_pose);
-        
+        plastic_fundamentals::Pose current_pose_msg;
+        current_pose_msg.row = current_pose.row;
+        current_pose_msg.column = current_pose.col;
+        current_pose_msg.orientation = angleToDirection(current_pose.theta);
+
+        pose_pub.publish(current_pose_msg);
+
+        ROS_INFO("Localized at row=%d, column=%d, orientation=%d, angle=%f (confidence=%.3f)",
+                           current_pose.row, current_pose.col, current_pose_msg.orientation, current_pose.theta, max_weight);
+
+
         if (first_localization) {
             first_localization = false;
+
             ROS_INFO("*BEEP* Successfully localized!");
         }
+    }
+
+    if (is_localized && max_weight < 0.003 && avg_weight < 0.001 && n_eff < 0.2 * NUM_PARTICLES) {
+        ROS_WARN("Robot is lost! Re-initializing particles.");
+        initializeParticles(map_data);
+        is_localized = false;
     }
 }
 
@@ -785,7 +968,7 @@ void localizationRoutine(ros::Rate rate) {
             switch (localization_phase) {
                 case SPIN:
                     ROS_INFO("Performing rotation to gather more information...");
-                    rotate(M_PI / 2, 40.0);
+                    rotate(M_PI / 2, 10.0);
                     localization_phase = MOVE;
                     break;
 
@@ -793,11 +976,11 @@ void localizationRoutine(ros::Rate rate) {
                     ros::spinOnce();
                     if (pathClear) {
                         ROS_INFO("Moving robot to cover more area...");
-                        translate(move_distance, 40.0);
+                        translate(move_distance, 10.0);
                         localization_phase = SPIN;
                     } else {
                         ROS_INFO("Obstacle detected, changing direction...");
-                        rotate(M_PI / 2, 40.0);
+                        rotate(M_PI / 2, 10.0);
                     }
                     break;
             }
@@ -812,7 +995,7 @@ int main(int argc, char** argv) {
     ros::init(argc, argv, "mcl_localization");
     ros::NodeHandle nh;
 
-    client = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
+    marker = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
 
     ros::Subscriber sub = nh.subscribe("sensor_packet", 1, sensorCallback);
 
@@ -822,11 +1005,13 @@ int main(int argc, char** argv) {
     pose_pub = nh.advertise<plastic_fundamentals::Pose>("/pose", 10);
     particle_pub = nh.advertise<visualization_msgs::MarkerArray>("/particles", 10);
     
-    ros::ServiceClient client = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
-    diffDriveClient = &client;
+    ros::ServiceClient diffDrive = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
+    diffDriveClient = &diffDrive;
 
     ros::ServiceClient resetEncoders = nh.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
     resetEncodersClient = &resetEncoders;
+
+    ros::ServiceServer service = nh.advertiseService("execute_plan", executePlan);
 
     ROS_INFO("MCL localization node started");
 
@@ -842,9 +1027,9 @@ int main(int argc, char** argv) {
 
     localizationRoutine(rate);
 
-    while (ros::ok()) {
-        pose_pub.publish(current_pose);
+    ROS_INFO("Localization routine completed, waiting for a plan to execute...");
 
+    while (ros::ok()) {
         ros::spinOnce();
         rate.sleep();
     }

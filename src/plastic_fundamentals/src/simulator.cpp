@@ -41,7 +41,7 @@ public:
 
         scan.angle_min = -M_PI * 2 / 3; // -120 degrees
         scan.angle_max = M_PI * 2 / 3; // 120 degrees
-        scan.angle_increment = M_PI / 60;
+        scan.angle_increment = M_PI / 300;
         scan.range_min = 0.0;
         scan.range_max = 1.0;
 
@@ -95,7 +95,7 @@ public:
             ROS_ERROR("Failed to call service publish_marker_service");
         }
 
-        srv.request.marker_type = "LineMarker"; // For walls
+        srv.request.marker_type = "MapMarker"; // For walls
         srv.request.lines = line_segments_;
 
         if (!client.call(srv)) {
@@ -327,18 +327,20 @@ int main(int argc, char** argv) {
 
     double cell_size = 0.8;
 
-    int x = 0;
-    int y = 0;
+    int x = 1;
+    int y = 2;
+
+    int direction = 1; // 0: right, 1: up, 2: left, 3: down
 
     double initial_x = x * cell_size + 0.4;
     double initial_y = y * cell_size + 0.4;
-    double initial_theta = 0;
+    double initial_theta = (direction - 1) % 4 * M_PI / 2;
 
     RobotSimulator robot(nh, map_data, initial_x, initial_y, initial_theta);
 
     ros::Rate loop_rate(100);
     while (ros::ok()) {
-        double dt = loop_rate.expectedCycleTime().toSec();  // Time difference between updates
+        double dt = loop_rate.expectedCycleTime().toSec() * 5;  // Time difference between updates
 
         robot.updatePose(dt);
         robot.publishSensorPacket();

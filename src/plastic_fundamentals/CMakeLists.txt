@@ -76,6 +76,10 @@ add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
 
+add_executable(align4 src/align4.cpp)
+target_link_libraries(align4 ${catkin_LIBRARIES})
+add_dependencies(align4 create_fundamentals_generate_messages_cpp)
+
 add_executable(execute_plan_server src/execute_plan_server.cpp)
 target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
 add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
@@ -107,4 +111,8 @@ add_dependencies(simulator create_fundamentals_generate_messages_cpp)
 add_executable(mcl_wanderer src/mcl_wanderer.cpp)
 target_link_libraries(mcl_wanderer ${catkin_LIBRARIES})
 add_dependencies(mcl_wanderer create_fundamentals_generate_messages_cpp)
+
+add_executable(calibrate src/calibrate.cpp)
+target_link_libraries(calibrate ${catkin_LIBRARIES})
+add_dependencies(calibrate create_fundamentals_generate_messages_cpp)
 
