@@ -2,6 +2,8 @@
 #include <plastic_fundamentals/PublishMarker.h>  // Custom service header (make sure your message types are set correctly)
 #include <plastic_fundamentals/Grid.h>
 #include <create_fundamentals/DiffDrive.h>
+#include <create_fundamentals/ResetEncoders.h>
+#include <create_fundamentals/SensorPacket.h>
 
 #include <cmath>
 #include <random>
@@ -25,7 +27,25 @@ constexpr double INIT_X_NOISE = 0.1;
 constexpr double INIT_Y_NOISE = 0.1;
 constexpr double INIT_THETA_NOISE = 0.2;
 
+double leftTicks = 0;
+double rightTicks = 0;
+
 std::default_random_engine random_generator;
+
+
+create_fundamentals::DiffDrive diffDriveSrv;
+
+ros::ServiceClient* resetEncodersClient;
+ros::ServiceClient* diffDriveClient;
+
+void resetEncoders() {
+    ROS_INFO("Resetting the encoders");
+    create_fundamentals::ResetEncoders srv;
+    if(resetEncodersClient->call(srv)) {
+        leftTicks = 0;
+        rightTicks = 0;
+    }
+}
 
 struct Particle {
     double x;
@@ -95,42 +115,110 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
 
 }
 
-void spinInPlace(ros::ServiceClient& diffDrive, double angle_rad, double wheel_speed_rad_s) {
-    const double omega_robot = 2.0 * WHEEL_RADIUS_M * wheel_speed_rad_s / TRACK_WIDTH_M;
-    const double duration_s = std::fabs(angle_rad) / std::fabs(omega_robot);
-
-    create_fundamentals::DiffDrive srv;
-    srv.request.right = (angle_rad >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
-    srv.request.left = -(srv.request.right);
-
-    if (!diffDrive.call(srv))
-        ROS_ERROR("Failed to send spin command!");
-
-    ros::Duration(duration_s).sleep();
-
-    srv.request.left = 0.0;
-    srv.request.right = 0.0;
-    if (!diffDrive.call(srv))
-        ROS_ERROR("Failed to send stop command!");
+double getRotationTicks(double angle_rad) {
+    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
+    double ticks_per_revolution = 6;
+    double wheel_travel_distance = (TRACK_WIDTH_M * angle_rad) / 2;
+    return (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
 }
 
-void moveLinear(ros::ServiceClient& diffDrive, double distance_m, double wheel_speed_rad_s) {
-    const double linear_speed = WHEEL_RADIUS_M * wheel_speed_rad_s;
-    const double duration_s = std::fabs(distance_m) / std::fabs(linear_speed);
+double getTranslationTicks(double distance) {
+    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
+    double ticks_per_revolution = 6;
+    return (distance / wheel_circumference) * ticks_per_revolution;
+}
 
-    create_fundamentals::DiffDrive srv;
-    srv.request.left = (distance_m >= 0.0 ? wheel_speed_rad_s : -wheel_speed_rad_s);
-    srv.request.right = srv.request.left;
 
-    if (!diffDrive.call(srv))
-        ROS_ERROR("Failed to send move command!");
+void rotate(double angle_rad, double speed) {
+    ROS_INFO("Rotation: %f", angle_rad);
 
-    ros::Duration(duration_s).sleep();
+    // Calculate the number of encoder ticks required for the desired rotation angle
+    double ticks = getRotationTicks(angle_rad);  // Get the required encoder ticks for the rotation
 
-    srv.request.left = 0.0;
-    srv.request.right = 0.0;
-    if (!diffDrive.call(srv))
-        ROS_ERROR("Failed to send stop command!");
+    resetEncoders();
+    ros::spinOnce();
+
+    double side = (angle_rad > 0) ? 1.0 : -1.0;
+
+    diffDriveSrv.request.left = -side * speed;
+    diffDriveSrv.request.right = side * speed;
+
+    ros::Rate rate(100);
+    ros::spinOnce();
+
+    while (ticks * 0.98 > (abs(leftTicks) + abs(rightTicks)) / 2) {
+        double correction = 0.0;
+
+        double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
+        double error_based_speed = speed * (angular_error / ticks);
+
+        if (error_based_speed < (speed / 4)) {
+            error_based_speed = (speed / 4);
+        }
+
+        if (rightTicks != 0.0) {
+            correction = 1 - abs(leftTicks) / abs(rightTicks);
+            diffDriveSrv.request.left = -side * error_based_speed * (1 + correction / 2);
+            diffDriveSrv.request.right = side * error_based_speed * (1 - correction / 2);
+        }
+
+        diffDriveClient->call(diffDriveSrv);
+        rate.sleep();
+        ros::spinOnce();
+    }
+
+    diffDriveSrv.request.left = 0;
+    diffDriveSrv.request.right = 0;
+    diffDriveClient->call(diffDriveSrv);
+
+    resetEncoders();
+
+
+}
+
+
+void translate(double distance, double speed) {
+    ROS_INFO("Translation: %f", distance);
+
+    double ticks = getTranslationTicks(distance);
+
+    resetEncoders();
+    ros::spinOnce();
+
+    double side = (distance > 0) ? 1.0 : -1.0;
+    diffDriveSrv.request.left = side * speed;
+    diffDriveSrv.request.right = side * speed;
+
+    ros::Rate rate(10);
+
+    ros::spinOnce();
+
+    while (ticks * 0.99 > (abs(leftTicks) + abs(rightTicks)) / 2) {
+        double correction = 0.0;
+
+        double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
+        double error_based_speed = speed * (angular_error / ticks);
+
+        if (error_based_speed < (speed / 2)) {
+            error_based_speed = (speed / 2);
+        }
+
+        if (rightTicks != 0.0) {
+            correction = 1 - abs(leftTicks) / abs(rightTicks);
+            diffDriveSrv.request.left = side * error_based_speed * (1 + correction / 2);
+            diffDriveSrv.request.right = side * error_based_speed * (1 - correction / 2);
+        }
+
+        diffDriveClient->call(diffDriveSrv);
+        rate.sleep();
+        ros::spinOnce();
+    }
+
+    diffDriveSrv.request.left = 0;
+    diffDriveSrv.request.right = 0;
+    diffDriveClient->call(diffDriveSrv);
+
+    resetEncoders();
 }
 
 void getMapLines(const plastic_fundamentals::Grid::ConstPtr& msg) {
@@ -144,10 +232,28 @@ void getMapLines(const plastic_fundamentals::Grid::ConstPtr& msg) {
             double x = i * CELL_SIZE;
             double y = j * CELL_SIZE;
 
-            if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::RIGHT) != cell.walls.end()) {
+            if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::LEFT) != cell.walls.end()) {
+                plastic_fundamentals::Line line;
+                line.x1 = x;
+                line.y1 = y;
+                line.x2 = x + CELL_SIZE;
+                line.y2 = y;
+                map_lines.push_back(line);
+            }
+
+            if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::BOTTOM) != cell.walls.end()) {
                 plastic_fundamentals::Line line;
                 line.x1 = x + CELL_SIZE;
                 line.y1 = y;
+                line.x2 = x + CELL_SIZE;
+                line.y2 = y + CELL_SIZE;
+                map_lines.push_back(line);
+            }
+
+            if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::RIGHT) != cell.walls.end()) {
+                plastic_fundamentals::Line line;
+                line.x1 = x;
+                line.y1 = y + CELL_SIZE;
                 line.x2 = x + CELL_SIZE;
                 line.y2 = y + CELL_SIZE;
                 map_lines.push_back(line);
@@ -157,30 +263,13 @@ void getMapLines(const plastic_fundamentals::Grid::ConstPtr& msg) {
                 plastic_fundamentals::Line line;
                 line.x1 = x;
                 line.y1 = y;
-                line.x2 = x + CELL_SIZE;
-                line.y2 = y;
-                map_lines.push_back(line);
-            }
-
-            if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::LEFT) != cell.walls.end()) {
-                plastic_fundamentals::Line line;
-                line.x1 = x;
-                line.y1 = y + CELL_SIZE;
-                line.x2 = x;
-                line.y2 = y;
-                map_lines.push_back(line);
-            }
-
-            if (std::find(cell.walls.begin(), cell.walls.end(), plastic_fundamentals::Cell::BOTTOM) != cell.walls.end()) {
-                plastic_fundamentals::Line line;
-                line.x1 = x + CELL_SIZE;
-                line.y1 = y + CELL_SIZE;
                 line.x2 = x;
                 line.y2 = y + CELL_SIZE;
                 map_lines.push_back(line);
             }
         }
     }
+
 }
 
 void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
@@ -193,23 +282,14 @@ void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
     getMapLines(msg);
     map_data = msg;
 
-    plastic_fundamentals::PublishMarker srv;
-
-    srv.request.marker_type = "LineMarker";
-    for (const auto& line : map_lines) {
-        srv.request.lines.push_back(line);
-    }
-
-    if (client.call(srv)) {
-        ROS_INFO("Map Marker published successfully.");
-    } else {
-        ROS_ERROR("Failed to call service marker_service");
-    }
-
-    ROS_INFO("Total number of lines in map: %zu", map_lines.size());
-
     initializeParticles(map_data);
 
+}
+
+void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
+{
+    leftTicks = msg->encoderLeft;
+    rightTicks = msg->encoderRight;
 }
 
 int main(int argc, char **argv) {
@@ -220,7 +300,12 @@ int main(int argc, char **argv) {
 
     ros::Subscriber map_sub = nh.subscribe("/map", 1, mapCallback);
 
-    ros::ServiceClient diff_drive_client = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
+    ros::Subscriber sub = nh.subscribe("sensor_packet", 1, sensorCallback);
+
+    ros::ServiceClient diffDrive = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
+    diffDriveClient = &diffDrive;
+    ros::ServiceClient resetEncoders = nh.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
+    resetEncodersClient = &resetEncoders;
 
     ros::spinOnce();
 
@@ -237,7 +322,9 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    //spinInPlace(diff_drive_client, M_PI / 2, 5.0);
+    rotate(M_PI / 2, 20.0);
+
+    translate(0.8, 20.0);
 
     /*ros::Rate rate(100);
 
@@ -249,7 +336,7 @@ int main(int argc, char **argv) {
         rate.sleep();
     }*/
 
-    plastic_fundamentals::PublishMarker srv;
+    /*plastic_fundamentals::PublishMarker srv;
 
     srv.request.marker_type = "PointMarker";
 
@@ -264,7 +351,7 @@ int main(int argc, char **argv) {
         ROS_INFO("PointMarker published successfully.");
     } else {
         ROS_ERROR("Failed to call service marker_service");
-    }
+    }*/
 
     return 0;
 }

@@ -29,10 +29,26 @@ public:
         marker.pose.orientation.w = 1.0;
         marker.scale.x = 0.05;
         marker.scale.y = 0.05;
+        marker.scale.z = 0.01;
         marker.color.r = 0.0;
         marker.color.g = 1.0;
         marker.color.b = 0.0;
         marker.color.a = 1.0;
+
+        visualization_msgs::Marker direction_marker;
+        direction_marker.header.frame_id = "map";
+        direction_marker.header.stamp = ros::Time::now();
+        direction_marker.ns = "points_direction";
+        direction_marker.id = 1;
+        direction_marker.type = visualization_msgs::Marker::LINE_LIST;
+        direction_marker.action = visualization_msgs::Marker::ADD;
+        direction_marker.pose.orientation.w = 1.0;
+        direction_marker.scale.x = 0.03;
+        direction_marker.color.r = 0.0;
+        direction_marker.color.g = 0.0;
+        direction_marker.color.b = 1.0;
+        direction_marker.color.a = 1.0;
+
 
         for (const plastic_fundamentals::Point& point : req.points) {
             geometry_msgs::Point pt;
@@ -40,9 +56,22 @@ public:
             pt.y = point.y;
             pt.z = 0.0;
             marker.points.push_back(pt);
+
+            geometry_msgs::Point direction;
+            direction.x = point.x + 0.05 * cos(point.w);
+            direction.y = point.y + 0.05 * sin(point.w);
+            direction.z = 0.0;
+            direction_marker.points.push_back(pt);
+            direction_marker.points.push_back(direction);
         }
 
         marker_pub_.publish(marker);
+
+
+        direction_marker.lifetime = ros::Duration(0);
+
+        marker_pub_.publish(marker);
+        marker_pub_.publish(direction_marker);
     }
 
     void robotMarker(const plastic_fundamentals::PublishMarker::Request &req)
@@ -107,7 +136,7 @@ public:
         marker.header.frame_id = "map";
         marker.header.stamp = ros::Time::now();
         marker.ns = "lines";
-        marker.id = 1;
+        marker.id = 5;
         marker.type = visualization_msgs::Marker::LINE_LIST;
         marker.action = visualization_msgs::Marker::ADD;
         marker.pose.orientation.w = 1.0;

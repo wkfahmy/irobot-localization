@@ -1,6 +1,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/LaserScan.h>
 #include <create_fundamentals/DiffDrive.h>
+#include "create_fundamentals/SensorPacket.h"
 #include <create_fundamentals/ResetEncoders.h>
 #include <plastic_fundamentals/PublishMarker.h>
 #include <plastic_fundamentals/Line.h>
@@ -14,12 +15,24 @@ public:
                        double start_x, double start_y, double start_theta)
         : nh_(nh), map_data_(map_data), robot_x_(start_x), robot_y_(start_y), robot_theta_(start_theta + M_PI),
           left_speed_(0), right_speed_(0), encoder_left_(0), encoder_right_(0), line_segments_(preprocessMap(map_data_)) {
+
+        sensor_packet_pub_ = nh_.advertise<create_fundamentals::SensorPacket>("sensor_packet", 1);
         lidar_pub_ = nh_.advertise<sensor_msgs::LaserScan>("scan_filtered", 1);
         diff_drive_service_ = nh_.advertiseService("diff_drive", &RobotSimulator::diffDriveCallback, this);
         reset_encoders_service_ = nh_.advertiseService("reset_encoders", &RobotSimulator::resetEncodersCallback, this);
 
         client = nh_.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
     }
+
+    void publishSensorPacket() {
+        create_fundamentals::SensorPacket sensor_packet;
+
+        sensor_packet.encoderLeft = encoder_left_;
+        sensor_packet.encoderRight = encoder_right_;
+
+        sensor_packet_pub_.publish(sensor_packet);
+    }
+
 
     void simulateLidar() {
         sensor_msgs::LaserScan scan;
@@ -44,18 +57,23 @@ public:
         for (int i = 0; i < num_ranges; ++i) {
             double angle = scan.angle_min + i * scan.angle_increment;
             double distance = getDistanceToWall(angle, lidar_origin_x, lidar_origin_y);
-            scan.ranges[i] = distance;
 
-            double end_x = lidar_origin_x + distance * cos(robot_theta_ + angle);
-            double end_y = lidar_origin_y + distance * sin(robot_theta_ + angle);
+            if (distance > scan.range_max || std::isinf(distance)) {
+                scan.ranges[i] = std::numeric_limits<float>::quiet_NaN();
+            } else {
+                scan.ranges[i] = distance;
 
-            plastic_fundamentals::Line line;
-            line.x1 = lidar_origin_x;
-            line.y1 = lidar_origin_y;
-            line.x2 = end_x;
-            line.y2 = end_y;
+                double end_x = lidar_origin_x + distance * cos(robot_theta_ + angle);
+                double end_y = lidar_origin_y + distance * sin(robot_theta_ + angle);
 
-            lines.push_back(line);
+                plastic_fundamentals::Line line;
+                line.x1 = lidar_origin_x;
+                line.y1 = lidar_origin_y;
+                line.x2 = end_x;
+                line.y2 = end_y;
+
+                lines.push_back(line);
+            }
         }
 
         lidar_pub_.publish(scan);
@@ -90,12 +108,23 @@ public:
             return;
         }
 
-        double linear_velocity = (left_speed_ + right_speed_) / 2.0;
+        double ticks_per_meter = 6 / (2 * M_PI * WHEEL_RADIUS_M);
 
-        double angular_velocity = (right_speed_ - left_speed_) / TRACK_WIDTH_M;
+        double left_linear_velocity = left_speed_ / ticks_per_meter;
+        double right_linear_velocity = right_speed_ / ticks_per_meter;
+
+        double linear_velocity = (left_linear_velocity + right_linear_velocity) / 2.0;
+
+        double angular_velocity = (right_linear_velocity - left_linear_velocity) / TRACK_WIDTH_M;
 
         double delta_theta = angular_velocity * dt;
         robot_theta_ += delta_theta;
+
+        if (robot_theta_ >= 2 * M_PI) {
+            robot_theta_ -= 2 * M_PI;
+        } else if (robot_theta_ < 0) {
+            robot_theta_ += 2 * M_PI;
+        }
 
         double delta_x = linear_velocity * cos(robot_theta_) * dt;
         double delta_y = linear_velocity * sin(robot_theta_) * dt;
@@ -103,9 +132,17 @@ public:
         robot_x_ += delta_x;
         robot_y_ += delta_y;
 
-        encoder_left_ += left_speed_ * WHEEL_RADIUS_M * dt;
-        encoder_right_ += right_speed_ * WHEEL_RADIUS_M * dt;
+        double left_distance = left_linear_velocity * dt;
+        double right_distance = right_linear_velocity * dt;
 
+        double left_ticks = left_distance * ticks_per_meter;
+        double right_ticks = right_distance * ticks_per_meter;
+
+        encoder_left_ += left_ticks;
+        encoder_right_ += right_ticks;
+
+        //ROS_INFO("Angle = %f , X = %f, Y = %f, Left Encoder = %f, Right Encoder = %f",
+        //         robot_theta_ / M_PI * 180, robot_x_, robot_y_, encoder_left_, encoder_right_);
     }
 
     bool diffDriveCallback(create_fundamentals::DiffDrive::Request &req, create_fundamentals::DiffDrive::Response &res) {
@@ -115,7 +152,7 @@ public:
         left_speed_ = left_velocity;
         right_speed_ = right_velocity;
 
-        ROS_INFO("Received wheel velocities: Left = %f, Right = %f", left_velocity, right_velocity);
+        //ROS_INFO("Received wheel velocities: Left = %f, Right = %f", left_velocity, right_velocity);
 
         res.success = true;
         return true;
@@ -125,7 +162,7 @@ public:
         encoder_left_ = 0.0;
         encoder_right_ = 0.0;
 
-        ROS_INFO("Encoders reset successfully.");
+        //ROS_INFO("Encoders reset successfully.");
 
         res.success = true;
         return true;
@@ -163,7 +200,7 @@ private:
         ray.x2 = lidar_origin_x + cos(lidar_angle);
         ray.y2 = lidar_origin_y + sin(lidar_angle);
 
-        double closest_distance = 1.0;
+        double closest_distance = 1.05;
         double closest_intersect_x, closest_intersect_y;
 
         for (const auto& wall : line_segments_) {
@@ -235,6 +272,7 @@ private:
 
 private:
     ros::NodeHandle nh_;
+    ros::Publisher sensor_packet_pub_;
     ros::Publisher lidar_pub_;
     ros::ServiceServer diff_drive_service_;
     ros::ServiceServer reset_encoders_service_;
@@ -294,7 +332,7 @@ int main(int argc, char** argv) {
 
     double initial_x = x * cell_size + 0.4;
     double initial_y = y * cell_size + 0.4;
-    double initial_theta = M_PI;
+    double initial_theta = 0;
 
     RobotSimulator robot(nh, map_data, initial_x, initial_y, initial_theta);
 
@@ -303,6 +341,7 @@ int main(int argc, char** argv) {
         double dt = loop_rate.expectedCycleTime().toSec();  // Time difference between updates
 
         robot.updatePose(dt);
+        robot.publishSensorPacket();
         robot.simulateLidar();
 
         ros::spinOnce();
