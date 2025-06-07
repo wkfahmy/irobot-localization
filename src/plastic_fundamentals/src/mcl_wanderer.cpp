@@ -390,34 +390,31 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
     
     for (auto& p : particles) {
         std::vector<double> expected_scan = calculateExpectedScan(p, angles);
-        
-        double likelihood = 1.0;
+        double log_likelihood = 0.0;  // Using log probabilities for numerical stability
         int valid_rays = 0;
         
         for (size_t i = 0, j = 0; i < scan->ranges.size() && j < angles.size(); i += 10, ++j) {
             float measured = scan->ranges[i];
             double expected = expected_scan[j];
             
-            if (std::isnan(measured) || measured < scan->range_min || measured > scan->range_max) {
+            if (!std::isfinite(measured) || measured < scan->range_min || measured > scan->range_max) 
                 continue;
-            }
             
-            if (expected > 0.95 || std::isinf(expected)) {
+            if (!std::isfinite(expected) || expected > scan->range_max)
                 continue;
-            }
             
-            double sigma = 0.1;
-            double diff = measured - expected;
-            double prob = exp(-0.5 * diff * diff / (sigma * sigma));
-            
-            likelihood *= prob;
+            // More discriminative measurement model
+            double sigma = 0.05;  // Smaller sigma = more selective
+            double z_diff = measured - expected;
+            log_likelihood += -0.5 * z_diff * z_diff / (sigma * sigma);
             valid_rays++;
         }
         
         if (valid_rays > 0) {
-            p.weight *= pow(likelihood, 1.0 / valid_rays);
+            // Convert back from log space with normalization
+            p.weight *= exp(log_likelihood / valid_rays);
         } else {
-            p.weight *= 0.1;
+            p.weight *= 1e-6;  // Much stronger penalty for complete mismatches
         }
     }
     
@@ -465,59 +462,6 @@ plastic_fundamentals::Pose estimatePose() {
     }
     
     return pose;
-}
-
-void spinInPlace(ros::ServiceClient& diffDriveClient, double angle_rad, double speed) {
-    double direction = (angle_rad >= 0) ? 1.0 : -1.0;
-    double ticksTarget = getRotationTicks(angle_rad);
-
-    double x_bar_before = x_bar;
-    double y_bar_before = y_bar;
-    double theta_bar_before = theta_bar;
-
-    resetEncoders();
-
-    create_fundamentals::DiffDrive srv;
-    ros::Rate rate(10);
-
-    srv.request.left = -direction * speed;
-    srv.request.right = direction * speed;
-
-    while ((std::abs(leftTicks) + std::abs(rightTicks)) / 2 < std::abs(ticksTarget)) {
-        double correction = 0.0;
-        if (std::abs(rightTicks) > 0.01) {
-            correction = 1 - std::abs(leftTicks) / std::abs(rightTicks);
-            srv.request.left = -direction * speed * (1 + correction / 2);
-            srv.request.right = direction * speed * (1 - correction / 2);
-        }
-
-        diffDriveClient.call(srv);
-        ros::spinOnce();
-        rate.sleep();
-    }
-
-    srv.request.left = 0;
-    srv.request.right = 0;
-    diffDriveClient.call(srv);
-
-    // Estimate change in orientation
-    double dtheta = getRotationFromTicks(leftTicks, rightTicks);
-
-    double x_bar_after = x_bar_before;
-    double y_bar_after = y_bar_before;
-    double theta_bar_after = theta_bar_before + dtheta;
-
-    // Normalize angle
-    while (theta_bar_after > M_PI) theta_bar_after -= 2 * M_PI;
-    while (theta_bar_after < -M_PI) theta_bar_after += 2 * M_PI;
-
-    updateParticlesMotion(x_bar_before, y_bar_before, theta_bar_before, x_bar_after, y_bar_after);
-
-    x_bar = x_bar_after;
-    y_bar = y_bar_after;
-    theta_bar = theta_bar_after;
-
-    resetEncoders();
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
@@ -580,6 +524,7 @@ void laserCallback(const sensor_msgs::LaserScan::ConstPtr& msg){
     }
 
 
+
 }
 
 void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
@@ -619,6 +564,9 @@ int main(int argc, char **argv) {
 
     ros::ServiceClient client = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     diff_drive_client = &client;
+    ros::ServiceClient reset_client = nh.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
+    reset_encoders_client = &reset_client;
+    ros::service::waitForService("reset_encoders");
 
     ros::service::waitForService("diff_drive");
 
@@ -647,7 +595,6 @@ int main(int argc, char **argv) {
     create_fundamentals::DiffDrive srv;
     ros::Rate rate(10); // Loop at 10 Hz
     while(ros::ok() && !is_localized) {
-
         // Behavior state machine
         switch(current_state) {
             case EXPLORING:
@@ -682,12 +629,14 @@ int main(int argc, char **argv) {
                     int diff2 = end_index - min_index;
                     if (diff1 < diff2) {
                         // Turn left
-                        srv.request.left = -10;
-                        srv.request.right = 10;
+                        srv.request.left = -5;
+                        srv.request.right = 5;
+                        ros::Duration(0.5).sleep();
                     } else {
                         // Turn right
-                        srv.request.left = 10;
-                        srv.request.right = -10;
+                        srv.request.left = 5;
+                        srv.request.right = -5;
+                        ros::Duration(0.5).sleep();
                     }
                 }
                 else {
@@ -701,8 +650,8 @@ int main(int argc, char **argv) {
                 resetEncoders();
                 if(min_distance > 0.3) {
                     // Move forward
-                    srv.request.left = 10;
-                    srv.request.right = 10;
+                    srv.request.left = 5;
+                    srv.request.right = 5;
                 } else {
                     // Object too close, need to rotate
                     current_state = ROTATING;
