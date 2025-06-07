@@ -103,3 +103,8 @@ add_dependencies(marker_test create_fundamentals_generate_messages_cpp)
 add_executable(simulator src/simulator.cpp)
 target_link_libraries(simulator ${catkin_LIBRARIES})
 add_dependencies(simulator create_fundamentals_generate_messages_cpp)
+
+add_executable(mcl_wanderer src/mcl_wanderer.cpp)
+target_link_libraries(mcl_wanderer ${catkin_LIBRARIES})
+add_dependencies(mcl_wanderer create_fundamentals_generate_messages_cpp)
+
