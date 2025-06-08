@@ -38,6 +38,8 @@ constexpr double THETA_RESAMPLE_NOISE = 0.2;
 
 constexpr double RESAMPLE_THRESHOLD = 0.4;
 
+bool isFlying = false; // Flag to indicate if the robot is not on the ground
+
 double leftTicks = 0;
 double rightTicks = 0;
 
@@ -564,6 +566,16 @@ void resetEncoders() {
 
 void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
 {
+    if(msg->wheeldropCaster == true || msg->wheeldropLeft == true || msg->wheeldropRight == true) {
+        isFlying = true;
+        diffDriveSrv.request.left = 0;
+        diffDriveSrv.request.right = 0;
+        diffDriveClient->call(diffDriveSrv);
+        ROS_WARN("Wheeldrop detected, shutting down the node");
+        resetEncoders();
+         ros::shutdown();
+        return;
+    }
     leftTicks = msg->encoderLeft;
     rightTicks = msg->encoderRight;
 
@@ -859,7 +871,7 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundam
         double target_y = target_grid_y * CELL_SIZE + 0.4;
 
 
-        rotate_to(target_theta, 7.0);
+        rotate_to(target_theta, 5.0);
 
         translate_to(target_x, target_y, 7.0);
 
@@ -982,7 +994,7 @@ void localizationRoutine(ros::Rate rate) {
             switch (localization_phase) {
                 case SPIN:
                     ROS_INFO("Performing rotation to gather more information...");
-                    rotate(M_PI / 2, 7.0);
+                    rotate(M_PI / 2, 5.0);
                     localization_phase = MOVE;
                     break;
 
@@ -994,7 +1006,7 @@ void localizationRoutine(ros::Rate rate) {
                         localization_phase = SPIN;
                     } else {
                         ROS_INFO("Obstacle detected, changing direction...");
-                        rotate(M_PI / 6, 7.0);
+                        rotate(M_PI / 2, 5.0);
                     }
                     break;
             }
@@ -1104,7 +1116,7 @@ int main(int argc, char** argv) {
 
     ROS_INFO("Localization routine completed, waiting for a plan to execute...");
 
-    while (ros::ok()) {
+    while (ros::ok() && !isFlying) {
         ros::spinOnce();
         rate.sleep();
     }

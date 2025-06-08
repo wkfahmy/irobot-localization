@@ -52,21 +52,17 @@ void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
     rightTicks = msg->encoderRight;
 }
 
-
-double k_rotation = 1.03; // Correction factor for rotation
-double k_translation = 1.0; // Correction factor for translation
-
 double getRotationTicks(double angle_rad) {
     double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
     double ticks_per_revolution = 6;
     double wheel_travel_distance = (TRACK_WIDTH_M * angle_rad) / 2;
-    return k_rotation * (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
+    return (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
 }
 
 double getTranslationTicks(double distance) {
     double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
     double ticks_per_revolution = 6;
-    return k_translation * (distance / wheel_circumference) * ticks_per_revolution;
+    return (distance / wheel_circumference) * ticks_per_revolution;
 }
 
 
@@ -429,20 +425,21 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         ROS_INFO("Computed center: (%f, %f), distance = %.3f", center_x, center_y, distance);
 
-        rotate(angle, 7.0);
-        translate(distance, 7.0);
+        rotate(angle, 5.0);
+        translate(distance, 5.0);
 
         float wall_angle = atan2(n1_y, n1_x);
 
         float correction = wall_angle - angle;
-        while (correction > M_PI/ 2) correction -= M_PI;
-        while (correction < -M_PI / 2) correction += M_PI;
+        while (correction > M_PI) correction -= 2*M_PI;
+        while (correction < -M_PI) correction += 2*M_PI;
 
-        rotate(correction, 7.0);
+        rotate(correction, 5.0);
 
         centered = true;
+        resetEncoders();
     } else {
-        rotate(2 * M_PI / 6, 7.0); // Turn 180 degrees if no lines found
+        rotate(2 * M_PI / 6, 5.0); // Turn 180 degrees if no lines found
         ros::Duration(0.5).sleep();
     }
 
@@ -473,14 +470,5 @@ int main(int argc, char** argv) {
         ros::spinOnce();
         rate.sleep();
     }
-
-    centered = false;
-    processing_done = false;
-
-    while (ros::ok() && !processing_done && !centered) {
-        ros::spinOnce();
-        rate.sleep();
-    }
-
     return 0;
 }
