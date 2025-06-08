@@ -116,3 +116,6 @@ add_executable(calibrate src/calibrate.cpp)
 target_link_libraries(calibrate ${catkin_LIBRARIES})
 add_dependencies(calibrate create_fundamentals_generate_messages_cpp)
 
+add_executable(play_guile src/play_guile.cpp)
+target_link_libraries(play_guile ${catkin_LIBRARIES})
+add_dependencies(play_guile ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
