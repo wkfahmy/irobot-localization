@@ -76,25 +76,9 @@ add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
 
-add_executable(align4 src/align4.cpp)
-target_link_libraries(align4 ${catkin_LIBRARIES})
-add_dependencies(align4 create_fundamentals_generate_messages_cpp)
-
-add_executable(execute_plan_server src/execute_plan_server.cpp)
-target_link_libraries(execute_plan_server ${catkin_LIBRARIES})
-add_dependencies(execute_plan_server create_fundamentals_generate_messages_cpp)
-
-add_executable(execute_smooth_plan_server src/execute_smooth_plan_server.cpp)
-target_link_libraries(execute_smooth_plan_server ${catkin_LIBRARIES})
-add_dependencies(execute_smooth_plan_server create_fundamentals_generate_messages_cpp)
-
 add_executable(mcl_localization src/mcl_localization.cpp)
 target_link_libraries(mcl_localization ${catkin_LIBRARIES})
 add_dependencies(mcl_localization create_fundamentals_generate_messages_cpp)
-
-add_executable(mcl_updated src/mcl_updated.cpp)
-target_link_libraries(mcl_updated ${catkin_LIBRARIES})
-add_dependencies(mcl_updated create_fundamentals_generate_messages_cpp)
 
 add_executable(marker_relay src/marker_relay.cpp)
 target_link_libraries(marker_relay ${catkin_LIBRARIES})

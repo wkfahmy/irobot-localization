@@ -4,6 +4,8 @@
 #include <create_fundamentals/ResetEncoders.h>
 #include "create_fundamentals/SensorPacket.h"
 #include <plastic_fundamentals/PublishMarker.h>
+#include <create_fundamentals/PlaySong.h>
+#include <create_fundamentals/StoreSong.h>
 #include <plastic_fundamentals/Grid.h>
 #include <plastic_fundamentals/Row.h>
 #include <plastic_fundamentals/Cell.h>
@@ -57,6 +59,9 @@ struct Particle {
 
 
 ros::ServiceClient* resetEncodersClient;
+
+ros::ServiceClient* storeSong;
+ros::ServiceClient* playSong;
 
 create_fundamentals::DiffDrive diffDriveSrv;
 ros::ServiceClient* diffDriveClient;
@@ -528,6 +533,10 @@ Particle estimatePose() {
     return pose;
 }
 
+
+double k_rotation = 1.03; // Correction factor for rotation
+double k_translation = 1.0; // Correction factor for translation
+
 double absEncoderLeft = 0.0;
 double absEncoderRight = 0.0;
 
@@ -583,13 +592,13 @@ double getRotationTicks(double angle_rad) {
     double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
     double ticks_per_revolution = 6;
     double wheel_travel_distance = (TRACK_WIDTH_M * angle_rad) / 2;
-    return (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
+    return k_rotation * (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
 }
 
 double getTranslationTicks(double distance) {
     double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
     double ticks_per_revolution = 6;
-    return (distance / wheel_circumference) * ticks_per_revolution;
+    return k_translation * (distance / wheel_circumference) * ticks_per_revolution;
 }
 
 
@@ -611,7 +620,7 @@ void rotate(double angle_rad, double speed) {
     double last_left_ticks = 0.0;
     double last_right_ticks = 0.0;
 
-    while (ticks * 0.98 > (abs(leftTicks) + abs(rightTicks)) / 2) {
+    while (ticks * 0.95 > (abs(leftTicks) + abs(rightTicks)) / 2) {
         double correction = 0.0;
 
         double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
@@ -752,8 +761,8 @@ void driveArc(double angle_rad, double arc_radius, double speed) {
 }
 
 bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_threshold) {
-    float angle_min_limit = -M_PI / 36;
-    float angle_max_limit =  M_PI / 36;
+    float angle_min_limit = -M_PI / 32;
+    float angle_max_limit =  M_PI / 32;
 
     int start_index = std::max(0, static_cast<int>((angle_min_limit - msg->angle_min) / msg->angle_increment));
     int end_index = std::min(static_cast<int>(msg->ranges.size()) - 1, static_cast<int>((angle_max_limit - msg->angle_min) / msg->angle_increment));
@@ -777,7 +786,7 @@ bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_th
 }
 
 void rotate_to(double target_theta, double speed) {
-    double tolerance = 0.05;
+    double tolerance = 0.10;
     ros::Rate rate(100);
     int max_iter = 3;
 
@@ -798,7 +807,7 @@ void rotate_to(double target_theta, double speed) {
 }
 
 void translate_to(double target_x, double target_y, double speed) {
-    double tolerance = 0.03;
+    double tolerance = 0.05;
     ros::Rate rate(100);
     int max_iter = 3;
 
@@ -850,9 +859,9 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundam
         double target_y = target_grid_y * CELL_SIZE + 0.4;
 
 
-        rotate_to(target_theta, 5.0);
+        rotate_to(target_theta, 7.0);
 
-        translate_to(target_x, target_y, 8.0);
+        translate_to(target_x, target_y, 7.0);
 
         grid_x = target_grid_x;
         grid_y = target_grid_y;
@@ -881,7 +890,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     if (!map_data || particles.empty()) return;
 
     pathClear = false;
-    if(isClearPath(msg, 0.6)) {
+    if(isClearPath(msg, 0.8)) {
         pathClear = true;
     }
 
@@ -943,8 +952,13 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         if (first_localization) {
             first_localization = false;
-
-            ROS_INFO("*BEEP* Successfully localized!");
+            create_fundamentals::PlaySong play_srv;
+            play_srv.request.number = 1;
+            if (playSong->call(play_srv)) {
+                ROS_INFO("Guile theme playing!");
+            } else {
+                ROS_ERROR("Failed to play song.");
+            }
         }
     }
 
@@ -968,7 +982,7 @@ void localizationRoutine(ros::Rate rate) {
             switch (localization_phase) {
                 case SPIN:
                     ROS_INFO("Performing rotation to gather more information...");
-                    rotate(M_PI / 2, 10.0);
+                    rotate(M_PI / 2, 7.0);
                     localization_phase = MOVE;
                     break;
 
@@ -976,11 +990,11 @@ void localizationRoutine(ros::Rate rate) {
                     ros::spinOnce();
                     if (pathClear) {
                         ROS_INFO("Moving robot to cover more area...");
-                        translate(move_distance, 10.0);
+                        translate(move_distance, 7.0);
                         localization_phase = SPIN;
                     } else {
                         ROS_INFO("Obstacle detected, changing direction...");
-                        rotate(M_PI / 2, 10.0);
+                        rotate(M_PI / 6, 7.0);
                     }
                     break;
             }
@@ -991,9 +1005,70 @@ void localizationRoutine(ros::Rate rate) {
     }
 }
 
+void initSong() {
+
+    int MEASURE = 160;
+    int Q = MEASURE/4;
+    int HALF = MEASURE/2;
+
+    std::vector<unsigned int> guile_song = {
+        69, 9,
+        74, 9,
+        77, 9,
+        38, 70,
+        57, 33,
+        36, 33,
+        69, 9,
+        74, 9,
+        77, 9,
+        67, 9,
+        72, 9,
+        76, 9,
+        36, 33,
+        67, 9,
+        72, 9,
+        76, 9,
+        69, 69,
+        74, 69,
+        77, 73,
+        43, 9,
+        45, 9,
+        43, 9,
+        41, 9,
+        38, 33,
+        69, 9,
+        74, 9,
+        40, 9,
+        67, 9,
+        72, 9,
+        76, 9,
+        38, 9,
+        36, 9,
+    };
+
+    create_fundamentals::StoreSong store_srv;
+    store_srv.request.number = 1;
+    store_srv.request.song = guile_song;
+    if (storeSong->call(store_srv)) {
+        ROS_INFO("Guile theme uploaded!");
+    } else {
+        ROS_ERROR("Failed to upload song.");
+    }
+}
+
 int main(int argc, char** argv) {
     ros::init(argc, argv, "mcl_localization");
     ros::NodeHandle nh;
+
+    ros::service::waitForService("store_song");
+    ros::service::waitForService("play_song");
+
+    ros::ServiceClient store_song = nh.serviceClient<create_fundamentals::StoreSong>("store_song");
+    storeSong = &store_song;
+    ros::ServiceClient play_song = nh.serviceClient<create_fundamentals::PlaySong>("play_song");
+    playSong = &play_song;
+
+    initSong();
 
     marker = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
 

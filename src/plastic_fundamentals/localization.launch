@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="plastic_fundamentals" type="align" name="align_node" output="screen" />
+  <node pkg="plastic_fundamentals" type="mcl_localization" name="mcl_localization" output="screen">
+  </node>
+</launch>

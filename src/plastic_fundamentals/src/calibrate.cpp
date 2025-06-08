@@ -18,7 +18,7 @@ ros::ServiceClient* diffDriveClient;
 ros::ServiceClient marker;
 
 // CALIBRATION PARAMETERS
-double k_rotation = 1.0; // Correction factor for rotation
+double k_rotation = 1.05; // Correction factor for rotation
 double k_translation = 1.0; // Correction factor for translation
 
 
@@ -251,10 +251,10 @@ int main(int argc, char** argv) {
     resetEncodersClient = &resetEncoders;
 
     ros::Rate rate(100);
-    int turn_count = 1;
+    int turn_count = 4;
     double turn_angle = M_PI / 2;
     while (ros::ok() && turn_count > 0) {
-        driveArc(-turn_angle, 0.4, 5.0);
+        rotate(turn_angle, 7.0);
         turn_count--;
 
         rate.sleep();
