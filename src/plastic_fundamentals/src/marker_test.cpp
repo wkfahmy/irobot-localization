@@ -1,4 +1,5 @@
 #include <ros/ros.h>
+#include <plastic_fundamentals/Move.h>
 #include <plastic_fundamentals/PublishMarker.h>  // Custom service header (make sure your message types are set correctly)
 #include <plastic_fundamentals/Grid.h>
 #include <create_fundamentals/DiffDrive.h>
@@ -37,6 +38,12 @@ create_fundamentals::DiffDrive diffDriveSrv;
 
 ros::ServiceClient* resetEncodersClient;
 ros::ServiceClient* diffDriveClient;
+
+
+template <typename T>
+T clamp(T val, T min_val, T max_val) {
+    return std::max(min_val, std::min(val, max_val));
+}
 
 void resetEncoders() {
     ROS_INFO("Resetting the encoders");
@@ -116,27 +123,19 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
 }
 
 double getRotationTicks(double angle_rad) {
-    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
-    double ticks_per_revolution = 6;
-    double wheel_travel_distance = (TRACK_WIDTH_M * angle_rad) / 2;
-    return (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
+    return (TRACK_WIDTH_M * angle_rad) / (2.0 * WHEEL_RADIUS_M);
 }
 
 double getTranslationTicks(double distance) {
-    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
-    double ticks_per_revolution = 6;
-    return (distance / wheel_circumference) * ticks_per_revolution;
+    double wheel_circumference = WHEEL_RADIUS_M;
+    return (distance / wheel_circumference);
 }
 
 
 void rotate(double angle_rad, double speed) {
     ROS_INFO("Rotation: %f", angle_rad);
 
-    // Calculate the number of encoder ticks required for the desired rotation angle
-    double ticks = getRotationTicks(angle_rad);  // Get the required encoder ticks for the rotation
-
-    resetEncoders();
-    ros::spinOnce();
+    double ticks = getRotationTicks(fabs(angle_rad));
 
     double side = (angle_rad > 0) ? 1.0 : -1.0;
 
@@ -144,9 +143,20 @@ void rotate(double angle_rad, double speed) {
     diffDriveSrv.request.right = side * speed;
 
     ros::Rate rate(100);
+
+    resetEncoders();
     ros::spinOnce();
 
-    while (ticks * 0.98 > (abs(leftTicks) + abs(rightTicks)) / 2) {
+    double last_left_ticks = 0.0;
+    double last_right_ticks = 0.0;
+
+    double small_margin = 0.05;
+
+    while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
+        if (((abs(leftTicks) + abs(rightTicks)) / 2) >= (ticks - small_margin)) {
+            break;
+        }
+
         double correction = 0.0;
 
         double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
@@ -156,13 +166,18 @@ void rotate(double angle_rad, double speed) {
             error_based_speed = (speed / 4);
         }
 
-        if (rightTicks != 0.0) {
-            correction = 1 - abs(leftTicks) / abs(rightTicks);
-            diffDriveSrv.request.left = -side * error_based_speed * (1 + correction / 2);
-            diffDriveSrv.request.right = side * error_based_speed * (1 - correction / 2);
+        if (fabs(rightTicks) > 1e-3) {
+            correction = clamp(1 - abs(leftTicks) / abs(rightTicks), -0.5, 0.5);
         }
 
+        diffDriveSrv.request.left = -side * error_based_speed * (1 + correction / 2);
+        diffDriveSrv.request.right = side * error_based_speed * (1 - correction / 2);
+
         diffDriveClient->call(diffDriveSrv);
+
+        last_left_ticks = leftTicks;
+        last_right_ticks = rightTicks;
+
         rate.sleep();
         ros::spinOnce();
     }
@@ -172,8 +187,6 @@ void rotate(double angle_rad, double speed) {
     diffDriveClient->call(diffDriveSrv);
 
     resetEncoders();
-
-
 }
 
 
@@ -182,18 +195,18 @@ void translate(double distance, double speed) {
 
     double ticks = getTranslationTicks(distance);
 
-    resetEncoders();
-    ros::spinOnce();
-
     double side = (distance > 0) ? 1.0 : -1.0;
     diffDriveSrv.request.left = side * speed;
     diffDriveSrv.request.right = side * speed;
 
-    ros::Rate rate(10);
-
+    ros::Rate rate(100);
+    resetEncoders();
     ros::spinOnce();
 
-    while (ticks * 0.99 > (abs(leftTicks) + abs(rightTicks)) / 2) {
+    double last_left_ticks = 0.0;
+    double last_right_ticks = 0.0;
+
+    while (ticks > (abs(leftTicks) + abs(rightTicks)) / 2) {
         double correction = 0.0;
 
         double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
@@ -210,6 +223,10 @@ void translate(double distance, double speed) {
         }
 
         diffDriveClient->call(diffDriveSrv);
+
+        last_left_ticks = leftTicks;
+        last_right_ticks = rightTicks;
+
         rate.sleep();
         ros::spinOnce();
     }
@@ -282,7 +299,7 @@ void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
     getMapLines(msg);
     map_data = msg;
 
-    initializeParticles(map_data);
+    //initializeParticles(map_data);
 
 }
 
@@ -322,9 +339,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    rotate(M_PI / 2, 20.0);
+    ros::ServiceClient rotateClient = nh.serviceClient<plastic_fundamentals::Move>("perform_rotation");
+    plastic_fundamentals::Move srv;
+    srv.request.angle = M_PI / 2;
+    srv.request.speed = 5.0;
+    rotateClient.call(srv);
 
-    translate(0.8, 20.0);
+    //translate(0.8, 20.0);
 
     /*ros::Rate rate(100);
 

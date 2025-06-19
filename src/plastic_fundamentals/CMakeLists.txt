@@ -38,11 +38,14 @@ add_message_files(FILES
 
     Line.msg
     Point.msg
+
+        AbsEncoder.msg
 )
 #uncomment if you have defined services
 add_service_files(FILES
     ExecutePlan.srv
     PublishMarker.srv
+    Move.srv
 )
 
 #common commands for building c++ executables and libraries
@@ -103,3 +106,7 @@ add_dependencies(calibrate create_fundamentals_generate_messages_cpp)
 add_executable(play_guile src/play_guile.cpp)
 target_link_libraries(play_guile ${catkin_LIBRARIES})
 add_dependencies(play_guile ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(move src/move.cpp)
+target_link_libraries(move ${catkin_LIBRARIES})
+add_dependencies(move ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})

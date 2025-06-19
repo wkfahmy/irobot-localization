@@ -30,6 +30,8 @@ public:
         sensor_packet.encoderLeft = encoder_left_;
         sensor_packet.encoderRight = encoder_right_;
 
+
+
         sensor_packet_pub_.publish(sensor_packet);
     }
 
@@ -108,7 +110,7 @@ public:
             return;
         }
 
-        double ticks_per_meter = 6 / (2 * M_PI * WHEEL_RADIUS_M);
+        double ticks_per_meter = 1 / WHEEL_RADIUS_M;
 
         double left_linear_velocity = left_speed_ / ticks_per_meter;
         double right_linear_velocity = right_speed_ / ticks_per_meter;
@@ -327,8 +329,8 @@ int main(int argc, char** argv) {
 
     double cell_size = 0.8;
 
-    int x = 1;
-    int y = 2;
+    int x = 0;
+    int y = 0;
 
     int direction = 1; // 0: right, 1: up, 2: left, 3: down
 
@@ -338,9 +340,9 @@ int main(int argc, char** argv) {
 
     RobotSimulator robot(nh, map_data, initial_x, initial_y, initial_theta);
 
-    ros::Rate loop_rate(100);
+    ros::Rate loop_rate(1000);
     while (ros::ok()) {
-        double dt = loop_rate.expectedCycleTime().toSec() * 5;  // Time difference between updates
+        double dt = loop_rate.expectedCycleTime().toSec() * 50;  // Time difference between updates
 
         robot.updatePose(dt);
         robot.publishSensorPacket();
