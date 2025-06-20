@@ -1,4 +1,6 @@
 <launch>
     <node pkg="plastic_fundamentals" type="mcl_localization" name="localization" output="screen" />
     <node pkg="plastic_fundamentals" type="publish_map.py" name="map_publisher" output="screen" />
+    <node pkg="plastic_fundamentals" type="move_to_position" name="move_to_position_node" output="screen" />
+    <node pkg="plastic_fundamentals" type="move" name="move_node" output="screen" />
 </launch>

@@ -329,8 +329,8 @@ int main(int argc, char** argv) {
 
     double cell_size = 0.8;
 
-    int x = 0;
-    int y = 0;
+    int x = 3;
+    int y = 2;
 
     int direction = 1; // 0: right, 1: up, 2: left, 3: down
 
@@ -342,7 +342,7 @@ int main(int argc, char** argv) {
 
     ros::Rate loop_rate(1000);
     while (ros::ok()) {
-        double dt = loop_rate.expectedCycleTime().toSec() * 50;  // Time difference between updates
+        double dt = loop_rate.expectedCycleTime().toSec() * 5;  // Time difference between updates
 
         robot.updatePose(dt);
         robot.publishSensorPacket();

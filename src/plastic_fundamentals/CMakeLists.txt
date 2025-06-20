@@ -29,6 +29,8 @@ set(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin)
 #set the default path for built libraries to the "lib" directory
 set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 
+set(CMAKE_CXX_STANDARD 17)
+
 #uncomment if you have defined messages
 add_message_files(FILES
     Cell.msg
@@ -46,6 +48,7 @@ add_service_files(FILES
     ExecutePlan.srv
     PublishMarker.srv
     Move.srv
+    moveToPosition.srv
 )
 
 #common commands for building c++ executables and libraries
@@ -110,3 +113,23 @@ add_dependencies(play_guile ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTE
 add_executable(move src/move.cpp)
 target_link_libraries(move ${catkin_LIBRARIES})
 add_dependencies(move ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_library(graph_utils src/graph_utils.cpp)
+target_link_libraries(graph_utils ${catkin_LIBRARIES})
+add_dependencies(graph_utils ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_executable(move_to_position src/move_to_position.cpp)
+target_link_libraries(move_to_position
+    graph_utils              
+    ${catkin_LIBRARIES}
+)
+add_dependencies(move_to_position
+    graph_utils              
+    ${${PROJECT_NAME}_EXPORTED_TARGETS}
+    ${catkin_EXPORTED_TARGETS}
+)
+
+
+
+
+

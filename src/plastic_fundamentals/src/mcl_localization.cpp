@@ -694,7 +694,7 @@ void rotate_to(double target_theta, double speed) {
 void translate_to(double target_x, double target_y, double speed) {
     double tolerance = 0.02;
     ros::Rate rate(100);
-    int max_iter = 3;
+    int max_iter = 1;
     for (int i = 0; i < max_iter; ++i) {
         double dx = target_x - current_pose.x;
         double dy = target_y - current_pose.y;
@@ -705,7 +705,6 @@ void translate_to(double target_x, double target_y, double speed) {
         if (distance < tolerance) break;
 
         double theta_to_target = std::atan2(dy, dx);
-        rotate_to(theta_to_target, speed);
 
         translate(distance, speed);
         ros::spinOnce();
