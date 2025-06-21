@@ -1,11 +1,11 @@
 #include <ros/ros.h>
-#include <plastic_fundamentals/moveToPosition.h>
+#include <plastic_fundamentals/MoveToPosition.h>
 #include <plastic_fundamentals/ExecutePlan.h>
 #include <plastic_fundamentals/Pose.h>
 #include "graph_utils.hpp"
 #include <mutex>
 
-// Mutex for thread-safe pose access
+
 std::mutex pose_mutex;
 
 // Latest pose stored here
@@ -15,7 +15,6 @@ bool pose_received = false;
 
 ros::ServiceClient execute_plan_client;
 
-// Callback for /pose topic subscription
 void poseCallback(const plastic_fundamentals::Pose::ConstPtr& msg) {
     std::lock_guard<std::mutex> lock(pose_mutex);
     current_pose_row = msg->row;
@@ -24,7 +23,7 @@ void poseCallback(const plastic_fundamentals::Pose::ConstPtr& msg) {
 }
 
 
-bool moveToPosition(plastic_fundamentals::moveToPosition::Request &req, plastic_fundamentals::moveToPosition::Response &res) {
+bool moveToPosition(plastic_fundamentals::MoveToPosition::Request &req, plastic_fundamentals::MoveToPosition::Response &res) {
     int goal_row = req.row;
     int goal_col = req.column;
 

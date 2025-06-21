@@ -48,7 +48,7 @@ add_service_files(FILES
     ExecutePlan.srv
     PublishMarker.srv
     Move.srv
-    moveToPosition.srv
+    MoveToPosition.srv
 )
 
 #common commands for building c++ executables and libraries

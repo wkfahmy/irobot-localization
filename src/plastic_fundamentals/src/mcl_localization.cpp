@@ -21,32 +21,32 @@
 #include <algorithm>
 #include <fstream>
 #include <plastic_fundamentals/AbsEncoder.h>
-#include <queue>
+
 
 constexpr double WHEEL_RADIUS_M = 0.0325;
 constexpr double TRACK_WIDTH_M = 0.263;
 constexpr double LIDAR_OFFSET_M = 0.16;
 constexpr double CELL_SIZE = 0.8;
 
-int num_rows = 0;
-int num_cols = 0;
+constexpr int NUM_PARTICLES = 10000;
 
-int min_particles = 1000;
-int max_particles = 5000;
-int current_num_particles = 10000;
-
-double uncertainty = std::numeric_limits<double>::infinity();
+int min_particles = 500;
+int max_particles = 10000;
+int current_num_particles = NUM_PARTICLES;
 
 constexpr double XY_INIT_NOISE = 0.1;
 constexpr double THETA_INIT_NOISE = 0.2;
 
 constexpr double XY_MOTION_NOISE = 0.05;
-constexpr double THETA_MOTION_NOISE = 0.2;
+constexpr double THETA_MOTION_NOISE = 0.1;
 
-constexpr double XY_RESAMPLE_NOISE = 0.02;
+constexpr double XY_RESAMPLE_NOISE = 0.05;
 constexpr double THETA_RESAMPLE_NOISE = 0.1;
 
-constexpr double RESAMPLE_THRESHOLD = 0.5;
+constexpr double RESAMPLE_THRESHOLD = 0.4;
+
+sensor_msgs::LaserScan::ConstPtr last_scan_msg;
+
 
 bool isFlying = false; // Flag to indicate if the robot is not on the ground
 
@@ -61,6 +61,13 @@ enum LocalizationPhase {
     MOVE
 };
 
+enum Direction {
+    RIGHT = 0,
+    UP = 1,
+    LEFT = 2,
+    DOWN = 3
+};
+
 
 // Particle structure
 struct Particle {
@@ -71,8 +78,6 @@ struct Particle {
     int row;            // Grid row
     int col;            // Grid column
 };
-
-std::vector<std::vector<Particle>> clusters;
 
 ros::ServiceClient* storeSong;
 ros::ServiceClient* playSong;
@@ -127,11 +132,11 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
     std::uniform_real_distribution<double> xy_noise_dist(-XY_INIT_NOISE, XY_INIT_NOISE);
     std::uniform_real_distribution<double> theta_noise_dist(-THETA_INIT_NOISE, THETA_INIT_NOISE);
     
-    num_rows = map->rows.size();
-    num_cols = map->rows[0].cells.size();
+    int num_rows = map->rows.size();
+    int num_cols = map->rows[0].cells.size();
     int total_cells = num_rows * num_cols;
     
-    int particles_per_cell = current_num_particles / (total_cells * 4);
+    int particles_per_cell = NUM_PARTICLES / (total_cells * 4);
     if (particles_per_cell < 1) particles_per_cell = 1;
     
     for (int row = 0; row < num_rows; ++row) {
@@ -143,7 +148,7 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
                 double base_theta = (orientation - 1) * M_PI / 2.0;
 
                 for (int i = 0; i < particles_per_cell; ++i) {
-                    if (particles.size() >= current_num_particles) break;
+                    if (particles.size() >= NUM_PARTICLES) break;
                     
                     Particle p;
                     p.x = cell_center_x + xy_noise_dist(random_generator);
@@ -262,7 +267,8 @@ double calculateEffectiveParticles() {
 
 void resampleParticles() {
     double n_eff = calculateEffectiveParticles();
-    if (n_eff > RESAMPLE_THRESHOLD * current_num_particles && particles.size() == current_num_particles) {
+    if (n_eff > RESAMPLE_THRESHOLD * particles.size()) {
+        //ROS_INFO("Skipping resampling, effective particles: %.2f", n_eff);
         return;
     }
 
@@ -284,8 +290,8 @@ void resampleParticles() {
     std::normal_distribution<double> pos_noise(0, XY_RESAMPLE_NOISE);
     std::normal_distribution<double> ang_noise(0, THETA_RESAMPLE_NOISE);
 
-    for (size_t m = 0; m < current_num_particles; ++m) {
-        double u = r + m * (1.0 / current_num_particles);
+    for (size_t m = 0; m < particles.size(); ++m) {
+        double u = r + m * (1.0 / particles.size());
         while (u > cumulative_sum[i] && i < particles.size() - 1) {
             i++;
         }
@@ -302,26 +308,9 @@ void resampleParticles() {
         new_particles.push_back(particles[i]);
     }
 
-    /*if (n_eff < 0.2 * particles.size()) {
-        std::uniform_real_distribution<double> dist_x(0, num_cols * 0.8);  // Limiter à la taille de la carte
-        std::uniform_real_distribution<double> dist_y(0, num_rows * 0.8);
-        std::uniform_real_distribution<double> dist_theta(-M_PI, M_PI);
-
-        // Générer des particules uniformément réparties dans la carte (maze)
-        for (int i = 0; i < particles.size(); ++i) {
-            Particle p;
-            p.x = dist_x(random_generator);
-            p.y = dist_y(random_generator);
-            p.theta = dist_theta(random_generator);
-            p.weight = 1.0 / particles.size();  // Weight uniforme
-            new_particles.push_back(p);
-        }
-        ROS_INFO("Generated uniform particles for relocalization.");
-    }*/
-
     particles = new_particles;
 
-    double uniform_weight = 1.0 / current_num_particles;
+    double uniform_weight = 1.0 / particles.size();
 
     plastic_fundamentals::PublishMarker srv;
 
@@ -497,6 +486,11 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
                 continue;
             }
 
+
+            if (expected > 0.95 || std::isinf(expected)) {
+                continue;
+            }
+            
             double sigma = 0.1;
             double diff = measured - expected;
             double prob = exp(-0.5 * diff * diff / (sigma * sigma));
@@ -508,7 +502,7 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
         if (valid_rays > 0) {
             p.weight *= pow(likelihood, 1.0 / valid_rays);
         } else {
-            p.weight *= 0.3;
+            p.weight *= 0.1;
         }
     }
     
@@ -603,6 +597,13 @@ Particle estimatePoseFromCluster(const std::vector<Particle>& particles, double&
     return result;
 }
 
+
+
+double k_rotation = 1.0; // Correction factor for rotation
+double k_translation = 1.0; // Correction factor for translation
+
+bool skipNextSensorCallback = false;
+
 double lastAbsLeft = 0;
 double lastAbsRight = 0;
 
@@ -622,25 +623,73 @@ void absEncoderCallback(const plastic_fundamentals::AbsEncoder::ConstPtr& msg) {
     updateParticlesMotion(d, dtheta);
 }
 
-bool rotate(double angle_rad, double speed) {
+void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
+{
+    if(msg->wheeldropCaster == true || msg->wheeldropLeft == true || msg->wheeldropRight == true) {
+        isFlying = true;
+        diffDriveSrv.request.left = 0;
+        diffDriveSrv.request.right = 0;
+        diffDriveClient->call(diffDriveSrv);
+        ROS_WARN("Wheeldrop detected, shutting down the node");
+        ros::shutdown();
+        return;
+    }
+}
+
+template <typename T>
+T clamp(T val, T min_val, T max_val) {
+    return std::max(min_val, std::min(val, max_val));
+}
+
+void rotate(double angle_rad, double speed) {
     plastic_fundamentals::Move srv;
     srv.request.angle = angle_rad;
     srv.request.speed = speed;
-    bool success = rotateClient->call(srv);
-    lastAbsLeft = 0;
-    lastAbsRight = 0;
-    return success;
+    rotateClient->call(srv);
 }
 
-bool translate(double distance, double speed) {
+void translate(double distance, double speed) {
     plastic_fundamentals::Move srv;
     srv.request.distance = distance;
     srv.request.speed = speed;
-    bool success = translateClient->call(srv);
-    lastAbsLeft = 0;
-    lastAbsRight = 0;
-    return success;
+    translateClient->call(srv);
 }
+
+Direction getMoreOpenDirection(const sensor_msgs::LaserScan::ConstPtr& msg) {
+    int size = msg->ranges.size();
+    int third = size / 3;
+
+    double left_sum = 0, right_sum = 0;
+    int left_count = 0, right_count = 0;
+
+    // Left: last third of scan (positive angles)
+    for (int i = 2 * third; i < size; ++i) {
+        float r = msg->ranges[i];
+        if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
+            left_sum += r;
+            left_count++;
+        }
+    }
+
+    // Right: first third of scan (negative angles)
+    for (int i = 0; i < third; ++i) {
+        float r = msg->ranges[i];
+        if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
+            right_sum += r;
+            right_count++;
+        }
+    }
+
+    double left_avg = (left_count > 0) ? left_sum / left_count : 0;
+    double right_avg = (right_count > 0) ? right_sum / right_count : 0;
+
+    if (left_avg > right_avg) {
+        return LEFT;
+    } else {
+        return RIGHT;
+    }
+}
+
 
 bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_threshold) {
     float angle_min_limit = -M_PI / 32;
@@ -765,109 +814,58 @@ void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
     initializeParticles(map_data);
 }
 
-void adaptParticleCount(double uncertainty) {
-    int previous = current_num_particles;
-
-    if (uncertainty > 0.5) {
-        current_num_particles = std::min(current_num_particles * 2, max_particles);
+std::default_random_engine rng;
+void regenerateParticles(int new_count) {
+    std::uniform_real_distribution<double> dist_x(-2.0, 2.0);
+    std::uniform_real_distribution<double> dist_y(-2.0, 2.0);
+    std::uniform_real_distribution<double> dist_theta(-M_PI, M_PI);
+    particles.clear();
+    for (int i = 0; i < new_count; ++i) {
+        Particle p;
+        p.x = dist_x(rng);
+        p.y = dist_y(rng);
+        p.theta = dist_theta(rng);
+        p.weight = 1.0 / new_count;
+        particles.push_back(p);
     }
-    else if (uncertainty < 0.2 && current_num_particles > min_particles) {
+}
+
+void adaptParticleCount(double stddev_x, double stddev_y, double stddev_theta) {
+    double uncertainty = stddev_x + stddev_y + stddev_theta;
+    int previous = current_num_particles;
+    if (uncertainty > 0.5 && current_num_particles < max_particles) {
+        current_num_particles = std::min(current_num_particles * 2, max_particles);
+    } else if (uncertainty < 0.2 && current_num_particles > min_particles) {
         current_num_particles = std::max(current_num_particles / 2, min_particles);
     }
-
     if (current_num_particles != previous) {
-        ROS_INFO("Adjusted particle count to %d", current_num_particles);
+        regenerateParticles(current_num_particles);
+        ROS_INFO("Adapted particle count to %d", current_num_particles);
     }
 }
 
-std::vector<std::vector<Particle>> getClusters(const std::vector<Particle>& particles, double radius) {
-    std::vector<bool> visited(particles.size(), false);
-    std::vector<std::vector<Particle>> clusters;
+bool hasDominantCluster(const std::vector<Particle>& particles, double radius, double dominance_ratio_threshold, double* out_ratio = nullptr) {
+    int best_cluster_size = 0;
 
-    for (size_t i = 0; i < particles.size(); ++i) {
-        if (visited[i]) continue;
-
-        std::vector<Particle> cluster;
-        cluster.push_back(particles[i]);
-        visited[i] = true;
-
-        std::queue<int> to_check;
-        to_check.push(i);
-
-        while (!to_check.empty()) {
-            int idx = to_check.front();
-            to_check.pop();
-
-            for (size_t j = 0; j < particles.size(); ++j) {
-                if (visited[j]) continue;
-                double dist = std::sqrt(std::pow(particles[j].x - particles[idx].x, 2) +
-                                       std::pow(particles[j].y - particles[idx].y, 2));
-                if (dist < radius) {
-                    visited[j] = true;
-                    cluster.push_back(particles[j]);
-                    to_check.push(j);
-                }
+    for (const auto& center : particles) {
+        int count = 0;
+        for (const auto& p : particles) {
+            double dx = p.x - center.x;
+            double dy = p.y - center.y;
+            if (dx * dx + dy * dy < radius * radius) {
+                ++count;
             }
         }
-
-        clusters.push_back(cluster);
+        if (count > best_cluster_size) {
+            best_cluster_size = count;
+        }
     }
 
-    return clusters;
-}
-
-double calculateClusterUncertainty(const std::vector<Particle>& cluster) {
-    double sum_x = 0.0, sum_y = 0.0, sum_theta = 0.0;
-    double sum_x_squared = 0.0, sum_y_squared = 0.0, sum_theta_squared = 0.0;
-
-    for (const auto& p : cluster) {
-        sum_x += p.x;
-        sum_y += p.y;
-        sum_theta += p.theta;
-
-        sum_x_squared += p.x * p.x;
-        sum_y_squared += p.y * p.y;
-        sum_theta_squared += p.theta * p.theta;
+    double ratio = static_cast<double>(best_cluster_size) / particles.size();
+    if (out_ratio) {
+        *out_ratio = ratio;
     }
-
-    size_t cluster_size = cluster.size();
-    double mean_x = sum_x / cluster_size;
-    double mean_y = sum_y / cluster_size;
-    double mean_theta = sum_theta / cluster_size;
-
-    double variance_x = (sum_x_squared / cluster_size) - (mean_x * mean_x);
-    double variance_y = (sum_y_squared / cluster_size) - (mean_y * mean_y);
-    double variance_theta = (sum_theta_squared / cluster_size) - (mean_theta * mean_theta);
-
-    double stddev_x = std::sqrt(variance_x);
-    double stddev_y = std::sqrt(variance_y);
-    double stddev_theta = std::sqrt(variance_theta);
-
-    return stddev_x + stddev_y + stddev_theta;
-}
-
-double calculateGlobalUncertainty(const std::vector<Particle>& particles, double& cluster_ratio) {
-    clusters = getClusters(particles, 0.3);
-
-    double total_uncertainty = 0.0;
-    double total_particles_in_clusters = 0.0;
-    cluster_ratio = 0.0;
-
-    for (const auto& cluster : clusters) {
-        double cluster_uncertainty = calculateClusterUncertainty(cluster);
-        total_uncertainty += cluster_uncertainty * cluster.size();
-        total_particles_in_clusters += cluster.size();
-    }
-
-    if (!clusters.empty()) {
-        cluster_ratio = static_cast<double>(clusters.front().size()) / total_particles_in_clusters;
-    }
-
-    double uncertainty = total_uncertainty / total_particles_in_clusters;
-    if (uncertainty < 0.01) {
-        uncertainty = 0.01;
-    }
-    return uncertainty;
+    return ratio >= dominance_ratio_threshold;
 }
 
 bool isRobotLost(double max_weight, double avg_weight, double n_eff, int particle_count, double cluster_ratio) {
@@ -878,7 +876,10 @@ bool isRobotLost(double max_weight, double avg_weight, double n_eff, int particl
     return low_confidence && low_effective && no_dominant_cluster;
 }
 
+
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
+    last_scan_msg = msg;
+
     //if (processing_done) return;
     if (!map_data || particles.empty()) return;
 
@@ -892,18 +893,47 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     double n_eff = calculateEffectiveParticles();
     double effective_particles_threshold = 0.4 * current_num_particles;
 
-    adaptParticleCount(uncertainty);
+    double mean_x = 0, mean_y = 0, mean_theta = 0;
+    double max_weight = 0;
+    double total_weight = 0.0;
+
+    for (const auto& p : particles) {
+        mean_x += p.x;
+        mean_y += p.y;
+        mean_theta += p.theta;
+    }
+    mean_x /= particles.size();
+    mean_y /= particles.size();
+    mean_theta /= particles.size();
+
+    double var_x = 0, var_y = 0, var_theta = 0;
+    for (const auto& p : particles) {
+        var_x += pow(p.x - mean_x, 2);
+        var_y += pow(p.y - mean_y, 2);
+        var_theta += pow(p.theta - mean_theta, 2);
+
+        max_weight = std::max(max_weight, p.weight);
+        total_weight += p.weight;
+
+    }
+    double avg_weight = total_weight / particles.size();
+
+    var_x /= particles.size();
+    var_y /= particles.size();
+    var_theta /= particles.size();
+
+    double stddev_x = sqrt(var_x);
+    double stddev_y = sqrt(var_y);
+    double stddev_theta = sqrt(var_theta);
+
+    //adaptParticleCount(stddev_x, stddev_y, stddev_theta);
 
     resampleParticles();
     
     current_pose = estimatePose();
 
     double cluster_ratio = 0.0;
-    uncertainty = calculateGlobalUncertainty(particles, cluster_ratio);
-
-    ROS_INFO("Effective particles: %.2f, Uncertainty: %.3f, Cluster ratio: %.3f",
-             n_eff, uncertainty, cluster_ratio);
-    if (uncertainty <= 0.2 && cluster_ratio > 0.4) {
+    if (hasDominantCluster(particles, 0.3, 0.75, &cluster_ratio)) {
         is_localized = true;
 
         plastic_fundamentals::Pose current_pose_msg;
@@ -914,7 +944,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         pose_pub.publish(current_pose_msg);
 
         ROS_INFO("Localized at row=%d, column=%d, orientation=%d, angle=%f (confidence=%.3f)",
-                 current_pose.row, current_pose.col, current_pose_msg.orientation, current_pose.theta, uncertainty);
+                 current_pose.row, current_pose.col, current_pose_msg.orientation, current_pose.theta, max_weight);
 
         if (first_localization) {
             first_localization = false;
@@ -926,49 +956,47 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                 ROS_ERROR("Failed to play song.");
             }
         }
-    } else {
-        is_localized = false;
-        ROS_WARN("Localization not yet achieved, uncertainty: %.3f", uncertainty);
     }
 
 
-    /*if (is_localized && isRobotLost(max_weight, avg_weight, n_eff, particles.size(), cluster_ratio)) {
+    if (is_localized && isRobotLost(max_weight, avg_weight, n_eff, particles.size(), cluster_ratio)) {
         is_localized = false;
         ROS_WARN("Localization lost! Resetting pose...");
-    }*/
+    }
 }
 
 void localizationRoutine(ros::Rate rate) {
     LocalizationPhase localization_phase = SPIN;
-
-    double move_distance = 0.4;
+    double move_distance = 0.8;
 
     while (ros::ok() && !processing_done) {
         if (is_localized) {
             processing_done = true;
             ROS_INFO("Localization complete, publishing pose and waiting");
         } else {
+            if (last_scan_msg && isClearPath(last_scan_msg, 0.8)) {
+                localization_phase = MOVE;
+            } else {
+                localization_phase = SPIN;
+            }
+
             switch (localization_phase) {
                 case SPIN:
-                    ROS_INFO("Performing rotation to gather more information...");
-                    rotate(M_PI / 6, 5.0);
-                    localization_phase = MOVE;
+                    ROS_INFO("Evaluating rotation direction based on LiDAR...");
+                    if (last_scan_msg) {
+                        Direction direction = getMoreOpenDirection(last_scan_msg);
+                        double angle = (direction == LEFT) ? M_PI / 2 : -M_PI / 2;
+                        rotate(angle, 5.0);
+                    }
                     break;
 
                 case MOVE:
                     ros::spinOnce();
-                    bool success = true;
                     while (pathClear && !is_localized) {
-                        if (!success) {
-                            ROS_WARN("Failed to move robot, retrying...");
-                            rotate(M_PI / 6, 5.0);
-                        }
                         ROS_INFO("Moving robot to cover more area...");
-                        success = translate(move_distance, 7.0);
+                        translate(move_distance, 7.0);
                         ros::spinOnce();
                     }
-                    localization_phase = SPIN;
-
                     break;
             }
         }
@@ -977,6 +1005,7 @@ void localizationRoutine(ros::Rate rate) {
         rate.sleep();
     }
 }
+
 
 void initSong() {
 
@@ -1044,6 +1073,8 @@ int main(int argc, char** argv) {
     initSong();
 
     marker = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
+
+    ros::Subscriber sub = nh.subscribe("sensor_packet", 1, sensorCallback);
 
     ros::Subscriber map_sub = nh.subscribe("/map", 1, mapCallback);
     ros::Subscriber scan_sub = nh.subscribe("/scan_filtered", 1, scanCallback);
