@@ -1,4 +1,5 @@
 #include <ros/ros.h>
+#include <sensor_msgs/LaserScan.h>
 #include <plastic_fundamentals/Move.h>
 #include <create_fundamentals/DiffDrive.h>
 #include <create_fundamentals/ResetEncoders.h>
@@ -18,27 +19,54 @@ ros::ServiceClient resetEncodersClient;
 
 ros::Publisher absEncoderPub;
 
+const double ROBOT_RADIUS = 0.18;
+const double LIDAR_OFFSET = 0.16;
+const double SAFETY_MARGIN = 0.03;
+
+const double danger_distance = ROBOT_RADIUS + LIDAR_OFFSET + SAFETY_MARGIN;
+const double front_angle_threshold = atan2(ROBOT_RADIUS, LIDAR_OFFSET);
+
+bool isFlying = false;
+bool will_hit_obstacle = false;
+
 template <typename T>
 T clamp(T val, T min_val, T max_val) {
     return std::max(min_val, std::min(val, max_val));
+}
+
+void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
+    for (size_t i = 0; i < msg->ranges.size(); ++i) {
+        double angle = msg->angle_min + i * msg->angle_increment;
+
+        // Garder seulement les angles proches de 0° (devant)
+        if (std::abs(angle) <= M_PI / 6) {
+            double distance = msg->ranges[i];
+
+            if (distance >= msg->range_min && distance <= msg->range_max) {
+                if (distance < danger_distance) {
+                    will_hit_obstacle = true;
+                    return;
+                }
+            }
+        }
+    }
+    will_hit_obstacle = false;
 }
 
 void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg) {
     leftTicks = msg->encoderLeft;
     rightTicks = msg->encoderRight;
 
-    plastic_fundamentals::AbsEncoder absEncoderMsg;
-    absEncoderMsg.abs_left = absLeftTicks + leftTicks;
-    absEncoderMsg.abs_right = absRightTicks + rightTicks;
-    absEncoderPub.publish(absEncoderMsg);
+    if(msg->wheeldropCaster == true || msg->wheeldropLeft == true || msg->wheeldropRight == true) {
+        isFlying = true;
+    } else {
+        isFlying = false;
+    }
 }
 
 void resetEncoders() {
     create_fundamentals::ResetEncoders srv;
     if (resetEncodersClient.call(srv)) {
-        absLeftTicks += leftTicks;
-        absRightTicks += rightTicks;
-
         leftTicks = 0.0;
         rightTicks = 0.0;
     } else {
@@ -68,9 +96,9 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
 
     resetEncoders();
 
-    double small_margin = ticks * 0.01;
+    double small_margin = ticks * 0.03;
 
-    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok()) {
+    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok() && !isFlying) {
         double error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2.0);
         double error_based_speed = req.speed * (error / ticks);
 
@@ -88,8 +116,8 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
         diffDriveClient.call(diffDriveSrv);
 
         plastic_fundamentals::AbsEncoder msg;
-        msg.abs_left = absLeftTicks + leftTicks;
-        msg.abs_right = absRightTicks + rightTicks;
+        msg.abs_left = leftTicks;
+        msg.abs_right = rightTicks;
         absEncoderPub.publish(msg);
 
         ros::spinOnce();
@@ -119,7 +147,7 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
 
     double small_margin = ticks * 0.01;
 
-    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok()) {
+    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok() && !isFlying && !will_hit_obstacle) {
         double error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2.0);
         double error_based_speed = req.speed * (error / ticks);
 
@@ -137,8 +165,8 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
         diffDriveClient.call(diffDriveSrv);
 
         plastic_fundamentals::AbsEncoder msg;
-        msg.abs_left = absLeftTicks + leftTicks;
-        msg.abs_right = absRightTicks + rightTicks;
+        msg.abs_left = leftTicks;
+        msg.abs_right = rightTicks;
         absEncoderPub.publish(msg);
 
         ros::spinOnce();
@@ -151,7 +179,7 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
 
     resetEncoders();
 
-    res.success = true;
+    res.success = !will_hit_obstacle;
     return true;
 }
 
@@ -159,9 +187,12 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "move");
     ros::NodeHandle nh;
 
-    ros::Subscriber sub = nh.subscribe("sensor_packet", 1, sensorCallback);
+    ros::Subscriber scan_sub = nh.subscribe("/scan_filtered", 1, scanCallback);
+    ros::Subscriber sub = nh.subscribe("/sensor_packet", 1, sensorCallback);
+
     diffDriveClient = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
     resetEncodersClient = nh.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
+
 
     absEncoderPub = nh.advertise<plastic_fundamentals::AbsEncoder>("absolute_encoders", 10);
 
