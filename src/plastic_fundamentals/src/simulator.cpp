@@ -330,9 +330,9 @@ int main(int argc, char** argv) {
     double cell_size = 0.8;
 
     int x = 0;
-    int y = 1;
+    int y = 0;
 
-    int direction = 0; // 0: right, 1: up, 2: left, 3: down
+    int direction = 3; // 0: right, 1: up, 2: left, 3: down
 
     double initial_x = x * cell_size + 0.4;
     double initial_y = y * cell_size + 0.4;
