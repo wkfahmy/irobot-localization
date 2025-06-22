@@ -1,5 +1,4 @@
 <launch>
   <node pkg="plastic_fundamentals" type="align" name="align_node" output="screen" />
-  <node pkg="plastic_fundamentals" type="execute_plan_server" name="execute_plan_server" output="screen">
-  </node>
+  <node pkg="plastic_fundamentals" type="execute_plan_server" name="execute_plan_server" output="screen" />
 </launch>

@@ -976,7 +976,7 @@ void localizationRoutine(ros::Rate rate) {
                 case SPIN:
                     ROS_INFO("Rotation robot to cover more area...");
                     rotate(openDirection * M_PI / 2, 7.0);
-                    ros::Duration(3.0).sleep();
+                    ros::Duration(4.0).sleep();
                     break;
                 case MOVE:
                     ROS_INFO("Moving robot to cover more area...");

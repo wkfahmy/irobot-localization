@@ -1,7 +1,6 @@
 <launch>    
     <!-- Include the planning launch file to get localization and path planning -->
-    <include file="$(find plastic_fundamentals)/planning.launch"/>
-    
+
     <!-- Challenge Executor Node -->
     <node name="challenge_dry" pkg="plastic_fundamentals" type="challenge_dry" output="screen">
 

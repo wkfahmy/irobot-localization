@@ -64,7 +64,7 @@ void lidarCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         double angle = msg->angle_min + i * msg->angle_increment;
 
         // Garder seulement les angles proches de 0° (devant)
-        if (std::abs(angle) <= M_PI / 6) {
+        if (std::abs(angle) <= M_PI / 24) {
             double distance = msg->ranges[i];
 
             if (distance >= msg->range_min && distance <= msg->range_max) {
