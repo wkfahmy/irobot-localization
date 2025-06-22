@@ -31,14 +31,14 @@ constexpr double CELL_SIZE = 0.8;
 int num_rows = 0;
 int num_cols = 0;
 
-int min_particles = 500;
-int max_particles = 10000;
-int current_num_particles = 10000;
+int min_particles = 1000;
+int max_particles = 5000;
+int current_num_particles = 5000;
 
 double uncertainty = std::numeric_limits<double>::infinity();
 
 constexpr double XY_INIT_NOISE = 0.1;
-constexpr double THETA_INIT_NOISE = 0.4;
+constexpr double THETA_INIT_NOISE = 0.2;
 
 constexpr double XY_MOTION_NOISE = 0.05;
 constexpr double THETA_MOTION_NOISE = 0.2 ;
@@ -89,7 +89,7 @@ ros::ServiceClient marker;
 bool is_localized = false;
 bool first_localization = true;
 
-bool processing_done = true;
+bool processing_done = false;
 
 bool pathClear = false;
 int openDirection = 1;
@@ -222,44 +222,31 @@ void updateParticlesMotion(double distance, double angle) {
     }
 }
 
-void normalizeWeights() {
+double normalizeWeights() {
+    double sum_squared_weights = 0.0;
     double sum = 0.0;
     for (const auto& p : particles) {
         sum += p.weight;
+        sum_squared_weights += p.weight * p.weight;
     }
 
     if (sum > 0) {
         for (auto& p : particles) {
             p.weight /= sum;
         }
+        return 1.0 / sum_squared_weights * sum * sum;
     } else {
         // If all weights are zero, reset to uniform
         double uniform_weight = 1.0 / particles.size();
         for (auto& p : particles) {
             p.weight = uniform_weight;
         }
+        return 0.0;
+
     }
 }
 
-double calculateEffectiveParticles() {
-    double sum_squared_weights = 0.0;
-    double total_weight = 0.0;
-
-    for (const auto& p : particles) {
-        total_weight += p.weight;
-        sum_squared_weights += p.weight * p.weight;
-    }
-
-    if (total_weight > 0.0) {
-        return 1.0 / sum_squared_weights * total_weight * total_weight;
-    }
-
-    return 0.0;
-}
-
-
-void resampleParticles() {
-    double n_eff = calculateEffectiveParticles();
+void resampleParticles(double n_eff) {
     if (n_eff > RESAMPLE_THRESHOLD * current_num_particles && particles.size() == current_num_particles) {
         return;
     }
@@ -475,9 +462,9 @@ std::vector<double> calculateExpectedScan(const Particle& p, const std::vector<d
     return expected_distances;
 }
 
-void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
+double updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
     std::vector<double> angles;
-    for (size_t i = 0; i < scan->ranges.size(); i += 5) {
+    for (size_t i = 20; i < scan->ranges.size() - 20; i += 20) {
         angles.push_back(scan->angle_min + i * scan->angle_increment);
     }
 
@@ -487,7 +474,7 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
         double likelihood = 1.0;
         int valid_rays = 0;
 
-        for (size_t i = 0, j = 0; i < scan->ranges.size() && j < angles.size(); i += 5, ++j) {
+        for (size_t i = 0, j = 0; i < scan->ranges.size() && j < angles.size(); i += 20, ++j) {
             float measured = scan->ranges[i];
             double expected = expected_scan[j];
 
@@ -510,7 +497,7 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
         }
     }
 
-    normalizeWeights();
+    return normalizeWeights();
 }
 
 Particle estimatePose() {
@@ -641,7 +628,7 @@ bool translate(double distance, double speed) {
 }
 
 bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_threshold) {
-    double angle_range = M_PI / 12.0;  // ±15 degrees
+    double angle_range = M_PI / 24.0;  // ±15 degrees
 
     int start_index = std::max(0, static_cast<int>((-angle_range - msg->angle_min) / msg->angle_increment));
     int end_index = std::min(static_cast<int>((angle_range - msg->angle_min) / msg->angle_increment), static_cast<int>(msg->ranges.size()) - 1);
@@ -676,7 +663,7 @@ int getMostOpenDirection(const sensor_msgs::LaserScan::ConstPtr& msg) {
     double left_sum = 0, right_sum = 0;
     int left_count = 0, right_count = 0;
 
-    for (int i = 2 * third; i < size; ++i) {
+    for (int i = 2 * third; i < size; i += 5) {
         float r = msg->ranges[i];
         if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
             left_sum += r;
@@ -684,7 +671,7 @@ int getMostOpenDirection(const sensor_msgs::LaserScan::ConstPtr& msg) {
         }
     }
 
-    for (int i = 0; i < third; ++i) {
+    for (int i = 0; i < third; i += 5) {
         float r = msg->ranges[i];
         if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
             right_sum += r;
@@ -914,29 +901,24 @@ bool isRobotLost(double max_weight, double avg_weight, double n_eff, int particl
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    processing_done = false;
+    //processing_done = false;
 
     if (!map_data || particles.empty()) return;
 
     pathClear = isClearPath(msg, 0.8);
     openDirection = getMostOpenDirection(msg);
 
-    updateParticlesSensor(msg);
-
-    double n_eff = calculateEffectiveParticles();
+    double n_eff = updateParticlesSensor(msg);
     double effective_particles_threshold = 0.4 * current_num_particles;
-
-    adaptParticleCount(uncertainty);
-
-    resampleParticles();
-
-    current_pose = estimatePose();
 
     double cluster_ratio = 0.0;
     uncertainty = calculateGlobalUncertainty(particles, cluster_ratio);
+    adaptParticleCount(uncertainty);
 
-    ROS_INFO("Effective particles: %.2f, Uncertainty: %.3f, Cluster ratio: %.3f",
-             n_eff, uncertainty, cluster_ratio);
+    resampleParticles(n_eff);
+
+    current_pose = estimatePose();
+
     if (uncertainty <= 0.2 && cluster_ratio > 0.7) {
         is_localized = true;
 
@@ -968,7 +950,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
     }
 
-    processing_done = true;
+    //processing_done = true;
     /*if (is_localized && isRobotLost(max_weight, avg_weight, n_eff, particles.size(), cluster_ratio)) {
         is_localized = false;
         ROS_WARN("Localization lost! Resetting pose...");
@@ -977,18 +959,13 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
 void localizationRoutine(ros::Rate rate) {
     LocalizationPhase localization_phase = SPIN;
-
     double move_distance = 0.8;
 
-    while (ros::ok()) {
-        /*if (!processing_done) {
-            continue;
-        }*/
-
+    while (ros::ok() && !processing_done) {
         if (is_localized) {
+            processing_done = true;
             ROS_INFO("Localization complete, publishing pose and waiting");
         } else {
-            ros::spinOnce();
             if (pathClear) {
                 localization_phase = MOVE;
             } else {
@@ -997,23 +974,19 @@ void localizationRoutine(ros::Rate rate) {
 
             switch (localization_phase) {
                 case SPIN:
-                    ROS_INFO("Performing rotation to gather more information...");
+                    ROS_INFO("Rotation robot to cover more area...");
                     rotate(openDirection * M_PI / 2, 7.0);
-                    //ros::Duration(2.0).sleep();
-
+                    ros::Duration(3.0).sleep();
                     break;
-
                 case MOVE:
-
                     ROS_INFO("Moving robot to cover more area...");
                     translate(move_distance, 10.0);
-
                     break;
             }
         }
 
-        rate.sleep();
         ros::spinOnce();
+        rate.sleep();
     }
 }
 
@@ -1112,7 +1085,7 @@ int main(int argc, char** argv) {
         ros::spinOnce();
     }
 
-    ros::Rate rate(50);
+    ros::Rate rate(10);
 
 
     localizationRoutine(rate);
