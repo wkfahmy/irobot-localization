@@ -5,6 +5,7 @@
 #include <create_fundamentals/SensorPacket.h>
 #include <plastic_fundamentals/PublishMarker.h>
 #include <plastic_fundamentals/Point.h>
+#include <plastic_fundamentals/Move.h>
 
 #include <cmath>
 #include <vector>
@@ -33,145 +34,28 @@ bool centered = false;
 
 bool moving = false;
 
+ros::ServiceClient* rotateClient;
+ros::ServiceClient* translateClient;
+
 float min_distance;
 int min_index;
 int start_index;
 int end_index;
 
-void resetEncoders() {
-    create_fundamentals::ResetEncoders srv;
-    if(resetEncodersClient->call(srv)) {
-        leftTicks = 0;
-        rightTicks = 0;
-    }
+bool rotate(double angle_rad, double speed) {
+    plastic_fundamentals::Move srv;
+    srv.request.angle = angle_rad;
+    srv.request.speed = speed;
+    bool success = rotateClient->call(srv);
+    return success;
 }
 
-void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg)
-{
-    leftTicks = msg->encoderLeft;
-    rightTicks = msg->encoderRight;
-}
-
-double getRotationTicks(double angle_rad) {
-    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
-    double ticks_per_revolution = 6;
-    double wheel_travel_distance = (TRACK_WIDTH_M * angle_rad) / 2;
-    return (wheel_travel_distance / wheel_circumference) * ticks_per_revolution;
-}
-
-double getTranslationTicks(double distance) {
-    double wheel_circumference = 2 * M_PI * WHEEL_RADIUS_M;
-    double ticks_per_revolution = 6;
-    return (distance / wheel_circumference) * ticks_per_revolution;
-}
-
-
-void rotate(double angle_rad, double speed) {
-    moving = true;
-
-    double ticks = getRotationTicks(fabs(angle_rad));
-
-
-    resetEncoders();
-    ros::spinOnce();
-
-    double side = (angle_rad > 0) ? 1.0 : -1.0;
-
-    diffDriveSrv.request.left = -side * speed;
-    diffDriveSrv.request.right = side * speed;
-
-    ros::Rate rate(100);
-    ros::spinOnce();
-
-    double last_left_ticks = 0.0;
-    double last_right_ticks = 0.0;
-
-
-    while (ticks * 0.98 > (abs(leftTicks) + abs(rightTicks)) / 2) {
-        double correction = 0.0;
-
-        double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
-        double error_based_speed = speed * (angular_error / ticks);
-
-        if (error_based_speed < (speed / 4)) {
-            error_based_speed = (speed / 4);
-        }
-
-        if (rightTicks != 0.0) {
-            correction = 1 - abs(leftTicks) / abs(rightTicks);
-            diffDriveSrv.request.left = -side * error_based_speed * (1 + correction / 2);
-            diffDriveSrv.request.right = side * error_based_speed * (1 - correction / 2);
-        }
-
-        diffDriveClient->call(diffDriveSrv);
-
-        last_left_ticks = leftTicks;
-        last_right_ticks = rightTicks;
-
-        rate.sleep();
-        ros::spinOnce();
-    }
-
-    diffDriveSrv.request.left = 0;
-    diffDriveSrv.request.right = 0;
-    diffDriveClient->call(diffDriveSrv);
-
-    resetEncoders();
-
-    moving = false;
-}
-
-
-void translate(double distance, double speed) {
-    moving = true;
-
-    double ticks = getTranslationTicks(distance);
-
-    resetEncoders();
-    ros::spinOnce();
-
-    double side = (distance > 0) ? 1.0 : -1.0;
-    diffDriveSrv.request.left = side * speed;
-    diffDriveSrv.request.right = side * speed;
-
-    ros::Rate rate(100);
-    ros::spinOnce();
-
-    double last_left_ticks = 0.0;
-    double last_right_ticks = 0.0;
-
-    while (ticks * 0.99 > (abs(leftTicks) + abs(rightTicks)) / 2) {
-        double correction = 0.0;
-
-        double angular_error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2);
-        double error_based_speed = speed * (angular_error / ticks);
-
-        if (error_based_speed < (speed / 2)) {
-            error_based_speed = (speed / 2);
-        }
-
-        if (rightTicks != 0.0) {
-            correction = 1 - abs(leftTicks) / abs(rightTicks);
-            diffDriveSrv.request.left = side * error_based_speed * (1 + correction / 2);
-            diffDriveSrv.request.right = side * error_based_speed * (1 - correction / 2);
-        }
-
-        diffDriveClient->call(diffDriveSrv);
-
-        last_left_ticks = leftTicks;
-        last_right_ticks = rightTicks;
-
-        rate.sleep();
-        ros::spinOnce();
-    }
-
-    diffDriveSrv.request.left = 0;
-    diffDriveSrv.request.right = 0;
-    diffDriveClient->call(diffDriveSrv);
-
-    resetEncoders();
-
-    moving = false;
+bool translate(double distance, double speed) {
+    plastic_fundamentals::Move srv;
+    srv.request.distance = distance;
+    srv.request.speed = speed;
+    bool success = translateClient->call(srv);
+    return success;
 }
 
 struct Line {
@@ -425,7 +309,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         ROS_INFO("Computed center: (%f, %f), distance = %.3f", center_x, center_y, distance);
 
-        rotate(angle, 5.0);
+        rotate(angle, 7.0);
         translate(distance, 5.0);
 
         float wall_angle = atan2(n1_y, n1_x);
@@ -434,12 +318,11 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         while (correction > M_PI) correction -= 2*M_PI;
         while (correction < -M_PI) correction += 2*M_PI;
 
-        rotate(correction, 5.0);
+        rotate(correction, 7.0);
 
         centered = true;
-        resetEncoders();
     } else {
-        rotate(2 * M_PI / 6, 5.0); // Turn 180 degrees if no lines found
+        rotate(2 * M_PI / 6, 7.0); // Turn 180 degrees if no lines found
         ros::Duration(0.5).sleep();
     }
 
@@ -455,15 +338,12 @@ int main(int argc, char** argv) {
 
     marker = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
 
-    ros::Subscriber sub = nh.subscribe("/sensor_packet", 1, sensorCallback);
-
     ros::Subscriber scan_sub = nh.subscribe("/scan_filtered", 1, scanCallback);
 
-    ros::ServiceClient diffDrive = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
-    diffDriveClient = &diffDrive;
-
-    ros::ServiceClient resetEncoders = nh.serviceClient<create_fundamentals::ResetEncoders>("reset_encoders");
-    resetEncodersClient = &resetEncoders;
+    ros::ServiceClient rotate_client = nh.serviceClient<plastic_fundamentals::Move>("perform_rotation");
+    rotateClient = &rotate_client;
+    ros::ServiceClient translate_client = nh.serviceClient<plastic_fundamentals::Move>("perform_translation");
+    translateClient = &translate_client;
 
     ros::Rate rate(100);
     while (ros::ok() && !processing_done && !centered) {

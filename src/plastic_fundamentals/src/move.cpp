@@ -9,13 +9,22 @@
 #include <algorithm>
 #include <cmath>
 
-double absLeftTicks = 0.0;
-double absRightTicks = 0.0;
 double leftTicks = 0;
 double rightTicks = 0;
+
 std::vector<float> lidar_ranges;
 float angle_min, angle_increment;
 bool lidar_data_received = false;
+
+bool isFlying = false;
+bool will_hit_obstacle = false;
+
+const double ROBOT_RADIUS = 0.18;
+const double LIDAR_OFFSET = 0.16;
+const double SAFETY_MARGIN = 0.03;
+
+const double danger_distance = ROBOT_RADIUS + LIDAR_OFFSET + SAFETY_MARGIN;
+
 
 constexpr float DESIRED_DISTANCE = 0.4f;
 constexpr float MAX_LIDAR_RANGE = 1.0f;
@@ -38,10 +47,11 @@ void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg) {
     leftTicks = msg->encoderLeft;
     rightTicks = msg->encoderRight;
 
-    plastic_fundamentals::AbsEncoder absEncoderMsg;
-    absEncoderMsg.abs_left = absLeftTicks + leftTicks;
-    absEncoderMsg.abs_right = absRightTicks + rightTicks;
-    absEncoderPub.publish(absEncoderMsg);
+    if(msg->wheeldropCaster == true || msg->wheeldropLeft == true || msg->wheeldropRight == true) {
+        isFlying = true;
+    } else {
+        isFlying = false;
+    }
 }
 
 void lidarCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
@@ -49,15 +59,33 @@ void lidarCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     angle_min = msg->angle_min;
     angle_increment = msg->angle_increment;
     lidar_data_received = true;
+
+    for (size_t i = 0; i < msg->ranges.size(); ++i) {
+        double angle = msg->angle_min + i * msg->angle_increment;
+
+        // Garder seulement les angles proches de 0° (devant)
+        if (std::abs(angle) <= M_PI / 6) {
+            double distance = msg->ranges[i];
+
+            if (distance >= msg->range_min && distance <= msg->range_max) {
+                if (distance < danger_distance) {
+                    will_hit_obstacle = true;
+                    return;
+                }
+            }
+        }
+    }
+    will_hit_obstacle = false;
 }
 
 void resetEncoders() {
     create_fundamentals::ResetEncoders srv;
     if (resetEncodersClient.call(srv)) {
-        absLeftTicks += leftTicks;
-        absRightTicks += rightTicks;
         leftTicks = 0.0;
         rightTicks = 0.0;
+
+        lidar_ranges.clear();
+        lidar_data_received = false;
     } else {
         ROS_WARN("Failed to reset encoders.");
     }
@@ -138,9 +166,9 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
     double side = (req.angle > 0) ? 1.0 : -1.0;
     resetEncoders();
 
-    double small_margin = ticks * 0.01;
+    double small_margin = ticks * 0.015;
 
-    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok()) {
+    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok() && !isFlying) {
         double error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2.0);
         double error_based_speed = req.speed * (error / ticks);
         if (error_based_speed < req.speed / 4.0)
@@ -158,6 +186,11 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
         diffDriveSrv.request.right =  side * error_based_speed * (1.0 - correction / 2.0);
         diffDriveClient.call(diffDriveSrv);
 
+        plastic_fundamentals::AbsEncoder msg;
+        msg.abs_left = leftTicks;
+        msg.abs_right = rightTicks;
+        absEncoderPub.publish(msg);
+
         ros::spinOnce();
         rate.sleep();
     }
@@ -167,7 +200,7 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
     diffDriveClient.call(diffDriveSrv);
     resetEncoders();
 
-    res.success = true;
+    res.success = !will_hit_obstacle;
     return true;
 }
 
@@ -182,7 +215,7 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
 
     double small_margin = ticks * 0.01;
 
-    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok()) {
+    while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok() && !isFlying && !will_hit_obstacle) {
         double error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2.0);
         double error_based_speed = req.speed * (error / ticks);
         if (error_based_speed < req.speed / 2.0)
@@ -213,8 +246,8 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
         diffDriveClient.call(diffDriveSrv);
 
         plastic_fundamentals::AbsEncoder msg;
-        msg.abs_left = absLeftTicks + leftTicks;
-        msg.abs_right = absRightTicks + rightTicks;
+        msg.abs_left = leftTicks;
+        msg.abs_right = rightTicks;
         absEncoderPub.publish(msg);
 
         ros::spinOnce();
