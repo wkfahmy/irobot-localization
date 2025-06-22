@@ -98,10 +98,6 @@ add_executable(simulator src/simulator.cpp)
 target_link_libraries(simulator ${catkin_LIBRARIES})
 add_dependencies(simulator create_fundamentals_generate_messages_cpp)
 
-add_executable(mcl_wanderer src/mcl_wanderer.cpp)
-target_link_libraries(mcl_wanderer ${catkin_LIBRARIES})
-add_dependencies(mcl_wanderer create_fundamentals_generate_messages_cpp)
-
 add_executable(calibrate src/calibrate.cpp)
 target_link_libraries(calibrate ${catkin_LIBRARIES})
 add_dependencies(calibrate create_fundamentals_generate_messages_cpp)
@@ -117,6 +113,10 @@ add_dependencies(move ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARG
 add_library(graph_utils src/graph_utils.cpp)
 target_link_libraries(graph_utils ${catkin_LIBRARIES})
 add_dependencies(graph_utils ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_library(current_mcl src/current_mcl.cpp)
+target_link_libraries(current_mcl ${catkin_LIBRARIES})
+add_dependencies(current_mcl ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 add_executable(move_to_position src/move_to_position.cpp)
 target_link_libraries(move_to_position
