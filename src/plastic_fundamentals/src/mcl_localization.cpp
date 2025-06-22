@@ -257,6 +257,7 @@ double calculateEffectiveParticles() {
     return 0.0;
 }
 
+
 void resampleParticles() {
     double n_eff = calculateEffectiveParticles();
     if (n_eff > RESAMPLE_THRESHOLD * current_num_particles && particles.size() == current_num_particles) {
