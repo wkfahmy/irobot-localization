@@ -1,5 +1,7 @@
 float64 distance
 float64 angle
 float64 speed
+
+bool correction
 ---
 bool success

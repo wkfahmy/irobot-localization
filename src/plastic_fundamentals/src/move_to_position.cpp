@@ -8,7 +8,6 @@
 
 std::mutex pose_mutex;
 
-// Latest pose stored here
 int current_pose_row = -1;
 int current_pose_col = -1;
 bool pose_received = false;
@@ -44,10 +43,8 @@ bool moveToPosition(plastic_fundamentals::MoveToPosition::Request &req, plastic_
 
     ROS_INFO("Planning path from (%d, %d) to (%d, %d)", start.first, start.second, goal.first, goal.second);
 
-    // Create graph
     auto graph = createGraph();
 
-    // Find shortest path as list of positions
     std::vector<std::pair<int, int>> path_positions = findShortestPath(graph, start, goal);
 
     if (path_positions.empty()) {
@@ -59,7 +56,6 @@ bool moveToPosition(plastic_fundamentals::MoveToPosition::Request &req, plastic_
     // Convert path to direction enum values
     std::vector<int> path_directions = pathToDirections(path_positions);
 
-    // Prepare the ExecutePlan service request
     plastic_fundamentals::ExecutePlan execute_req;
     execute_req.request.plan = path_directions;
 
@@ -79,16 +75,13 @@ bool moveToPosition(plastic_fundamentals::MoveToPosition::Request &req, plastic_
 }
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "move_to_position_node");
+    ros::init(argc, argv, "move_to_position");
     ros::NodeHandle nh;
 
-    // Subscribe to /pose topic to get current pose updates
     ros::Subscriber pose_sub = nh.subscribe("/pose", 10, poseCallback);
 
-    // Create service client for execute_plan
-    execute_plan_client = nh.serviceClient<plastic_fundamentals::ExecutePlan>("execute_plan");
+    execute_plan_client = nh.serviceClient<plastic_fundamentals::ExecutePlan>("/execute_plan");
 
-    // Advertise the move_to_position service
     ros::ServiceServer move_to_position_srv = nh.advertiseService("move_to_position", moveToPosition);
 
     ROS_INFO("move_to_position service is ready and listening for goals.");

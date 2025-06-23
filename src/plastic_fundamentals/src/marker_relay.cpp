@@ -54,6 +54,33 @@ public:
         visualization_msgs::Marker marker;
         marker.header.frame_id = "map";
         marker.header.stamp = ros::Time::now();
+        marker.ns = "point";
+        marker.id = 7;
+        marker.type = visualization_msgs::Marker::POINTS;
+        marker.action = visualization_msgs::Marker::ADD;
+        marker.pose.orientation.w = 1.0;
+        marker.scale.x = 0.1;
+        marker.scale.y = 0.1;
+        marker.scale.z = 0.02;
+        marker.color.r = 1.0;
+        marker.color.g = 0.0;
+        marker.color.b = 0.0;
+        marker.color.a = 1.0;
+
+        geometry_msgs::Point pt;
+        pt.x = req.point.x;
+        pt.y = req.point.y;
+        pt.z = 0.05;
+        marker.points.push_back(pt);
+
+        marker_pub_.publish(marker);
+    }
+
+    void pointsMarker(const plastic_fundamentals::PublishMarker::Request &req)
+    {
+        visualization_msgs::Marker marker;
+        marker.header.frame_id = "map";
+        marker.header.stamp = ros::Time::now();
         marker.ns = "points";
         marker.id = 1;
         marker.type = visualization_msgs::Marker::POINTS;
@@ -96,9 +123,6 @@ public:
             direction_marker.points.push_back(pt);
             direction_marker.points.push_back(direction);
         }
-
-        marker_pub_.publish(marker);
-
 
         direction_marker.lifetime = ros::Duration(0);
 
@@ -233,6 +257,9 @@ public:
 
         if (req.marker_type == "MapMarker") {
             mapMarker(req);
+        }
+        else if (req.marker_type == "PointsMarker") {
+            pointsMarker(req);
         }
         else if (req.marker_type == "PointMarker") {
             pointMarker(req);

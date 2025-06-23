@@ -1,6 +1,7 @@
 #include <ros/ros.h>
 #include <plastic_fundamentals/MoveToPosition.h>
 #include <plastic_fundamentals/Pose.h>
+#include <plastic_fundamentals/Align.h>
 #include <create_fundamentals/StoreSong.h>
 #include <create_fundamentals/PlaySong.h>
 #include <std_msgs/String.h>
@@ -32,40 +33,35 @@ private:
     ros::ServiceClient move_to_position_client;
     ros::ServiceClient store_song_client;
     ros::ServiceClient play_song_client;
-    
-    // State management
+    ros::ServiceClient align_client;
+
     ChallengeState current_state;
     std::mutex pose_mutex;
     std::mutex state_mutex;
     
-    // Robot pose
     int current_row;
     int current_col;
     bool pose_received;
     
-    // Challenge data
     std::vector<std::pair<int, int>> gold_locations;
     std::vector<std::pair<int, int>> pickup_locations;
     std::vector<bool> gold_collected;
     int current_gold_target;
     int selected_pickup;
     
-    // Timing
     ros::Time collection_start_time;
     ros::Time exit_start_time;
     bool timing_active;
     
-    // Retry logic
     int movement_retry_count;
     int max_retries;
     ros::Time last_movement_attempt;
     
-    // Configuration
     std::string gold_file_path;
     std::string pickup_file_path;
     
 public:
-    ChallengeExecutor() : 
+    ChallengeExecutor() :
         nh("~"),
         current_state(INITIALIZING),
         current_row(-1),
@@ -77,18 +73,18 @@ public:
         movement_retry_count(0),
         max_retries(3)
     {
-        // Get file paths from parameters
         nh.param<std::string>("gold_file", gold_file_path, "gold.txt");
         nh.param<std::string>("pickup_file", pickup_file_path, "pickup.txt");
         
-        // Initialize ROS connections
         pose_sub = nh.subscribe("/pose", 10, &ChallengeExecutor::poseCallback, this);
         status_pub = nh.advertise<std_msgs::String>("/challenge_status", 10);
         
         move_to_position_client = nh.serviceClient<plastic_fundamentals::MoveToPosition>("/move_to_position");
-        store_song_client = nh.serviceClient<create_fundamentals::StoreSong>("store_song");
-        play_song_client = nh.serviceClient<create_fundamentals::PlaySong>("play_song");
-        
+        store_song_client = nh.serviceClient<create_fundamentals::StoreSong>("/store_song");
+        play_song_client = nh.serviceClient<create_fundamentals::PlaySong>("/play_song");
+
+        align_client = nh.serviceClient<plastic_fundamentals::Align>("/align");
+
         ROS_INFO("Challenge Executor initialized");
         ROS_INFO("Gold file: %s", gold_file_path.c_str());
         ROS_INFO("Pickup file: %s", pickup_file_path.c_str());
@@ -112,27 +108,33 @@ public:
         std::getline(file, line);
         file.close();
         
-        // Remove whitespace and parse JSON-like format: [[0,1], [3,1], ...]
         locations.clear();
-        
-        // Find all [x,y] pairs
-        size_t pos = 0;
-        while ((pos = line.find('[', pos)) != std::string::npos) {
-            size_t end = line.find(']', pos);
+        if (!line.empty() && line.front() == '[' && line.back() == ']') {
+            line = line.substr(1, line.size() - 2);
+        }
+
+        size_t start = 0;
+        while ((start = line.find('[', start)) != std::string::npos) {
+            size_t end = line.find(']', start);
             if (end == std::string::npos) break;
-            
-            std::string pair_str = line.substr(pos + 1, end - pos - 1);
+
+            std::string pair_str = line.substr(start + 1, end - start - 1);
             size_t comma = pair_str.find(',');
+
             if (comma != std::string::npos) {
+                std::string row_str = pair_str.substr(0, comma);
+                std::string col_str = pair_str.substr(comma + 1);
+
                 try {
-                    int row = std::stoi(pair_str.substr(0, comma));
-                    int col = std::stoi(pair_str.substr(comma + 1));
-                    locations.push_back({row, col});
+                    int row = std::stoi(row_str);
+                    int col = std::stoi(col_str);
+                    locations.emplace_back(row, col);
                 } catch (const std::exception& e) {
                     ROS_ERROR("Error parsing location: %s", e.what());
                 }
             }
-            pos = end + 1;
+
+            start = end + 1;
         }
         
         ROS_INFO("Parsed %zu locations from %s", locations.size(), filename.c_str());
@@ -146,21 +148,19 @@ public:
     void initializeSongs() {
         ROS_INFO("Initializing songs...");
         
-        // Wait for services to be available
-        if (!store_song_client.waitForExistence(ros::Duration(10.0))) {
+        if (!store_song_client.waitForExistence(ros::Duration(5.0))) {
             ROS_ERROR("store_song service not available");
             return;
         }
         
-        // Gold collection song (song #2) - Upbeat melody
         std::vector<unsigned int> gold_song = {
-            72, 16,  // C5
-            76, 16,  // E5
-            79, 16,  // G5
-            84, 32,  // C6
-            79, 16,  // G5
-            76, 16,  // E5
-            72, 32   // C5
+            72, 16,
+            76, 16,
+            79, 16,
+            84, 32,
+            79, 16,
+            76, 16,
+            72, 32
         };
         
         create_fundamentals::StoreSong store_req;
@@ -172,16 +172,15 @@ public:
             ROS_ERROR("Failed to store gold collection song");
         }
         
-        // Exit song (song #3) - Victory melody
         std::vector<unsigned int> exit_song = {
-            60, 16,  // C4
-            64, 16,  // E4
-            67, 16,  // G4
-            72, 16,  // C5
-            76, 16,  // E5
-            79, 16,  // G5
-            84, 32,  // C6
-            84, 32   // C6
+            60, 16,
+            64, 16,
+            67, 16,
+            72, 16,
+            76, 16,
+            79, 16,
+            84, 32,
+            84, 32
         };
         
         store_req.request.number = 3;
@@ -192,7 +191,6 @@ public:
             ROS_ERROR("Failed to store exit song");
         }
         
-        // Success song (song #4) - Celebration
         std::vector<unsigned int> success_song = {
             72, 8, 76, 8, 79, 8, 84, 16,
             84, 8, 79, 8, 76, 8, 72, 16,
@@ -207,12 +205,11 @@ public:
             ROS_ERROR("Failed to store success song");
         }
         
-        // Failure song (song #5) - Sad melody
         std::vector<unsigned int> failure_song = {
-            60, 32,  // C4
-            58, 32,  // A#3
-            56, 32,  // G#3
-            55, 64   // G3
+            60, 32,
+            58, 32,
+            56, 32,
+            55, 64
         };
         
         store_req.request.number = 5;
@@ -240,7 +237,16 @@ public:
             ROS_ERROR("Failed to play song %d", song_number);
         }
     }
-    
+
+    void alignRobot() {
+        plastic_fundamentals::Align srv;
+        if (align_client.call(srv)) {
+            ROS_INFO("Robot successfully aligned");
+        } else {
+            ROS_ERROR("Failed to align robot");
+        }
+    }
+
     double calculateDistance(const std::pair<int, int>& pos1, const std::pair<int, int>& pos2) {
         int dr = pos1.first - pos2.first;
         int dc = pos1.second - pos2.second;
@@ -306,7 +312,7 @@ public:
         
         if (move_to_position_client.call(move_req)) {
             if (move_req.response.success) {
-                movement_retry_count = 0; // Reset retry count on success
+                movement_retry_count = 0;
                 return true;
             } else {
                 ROS_WARN("Move to position service returned failure");
@@ -348,8 +354,8 @@ public:
     }
     
     void executeStateMachine() {
-        ros::Rate rate(10); // 10 Hz
-        
+        ros::Rate rate(10);
+
         while (ros::ok()) {
             ChallengeState state = getState();
             
@@ -380,11 +386,11 @@ public:
                     
                 case COMPLETED:
                     handleCompleted();
-                    return; // Exit the loop
+                    return;
                     
                 case FAILED:
                     handleFailed();
-                    return; // Exit the loop
+                    return;
             }
             
             ros::spinOnce();
@@ -393,9 +399,6 @@ public:
     }
     
     void handleInitializing() {
-        publishStatus("Initializing challenge executor");
-        
-        // Wait for pose
         if (!pose_received) {
             ROS_INFO_THROTTLE(5, "Waiting for robot pose...");
             return;
@@ -403,7 +406,6 @@ public:
         
         ROS_INFO("Robot pose received: (%d, %d)", current_row, current_col);
         
-        // Parse location files
         if (!parseLocationFile(gold_file_path, gold_locations)) {
             publishStatus("Failed to parse gold locations file");
             setState(FAILED);
@@ -416,7 +418,6 @@ public:
             return;
         }
         
-        // Validate that we have valid locations
         if (gold_locations.empty()) {
             publishStatus("No gold locations found");
             setState(FAILED);
@@ -429,10 +430,8 @@ public:
             return;
         }
         
-        // Initialize gold collection tracking
         gold_collected.resize(gold_locations.size(), false);
         
-        // Initialize songs
         initializeSongs();
         
         publishStatus("Initialization complete - Starting challenge!");
@@ -442,11 +441,9 @@ public:
     void handlePlanning() {
         publishStatus("Planning next move");
         
-        // Find nearest uncollected gold
         current_gold_target = findNearestGold();
         
         if (current_gold_target == -1) {
-            // No more gold to collect, plan exit
             publishStatus("All gold collected! Planning exit route");
             selected_pickup = selectPickupLocation();
             if (selected_pickup == -1 || selected_pickup >= pickup_locations.size()) {
@@ -469,7 +466,7 @@ public:
             setState(MOVING_TO_GOLD);
         }
         
-        movement_retry_count = 0; // Reset retry count for new movement
+        movement_retry_count = 0;
     }
     
     void handleMovingToGold() {
@@ -483,21 +480,19 @@ public:
         
         if (isAtLocation(target.first, target.second)) {
             publishStatus("Arrived at gold location, starting collection");
+            alignRobot();
             setState(COLLECTING_GOLD);
             collection_start_time = ros::Time::now();
             timing_active = true;
-            playSong(2); // Play gold collection song
+            playSong(2);
             return;
         }
         
-        // Check if we should retry movement
         ros::Duration time_since_attempt = ros::Time::now() - last_movement_attempt;
         if (time_since_attempt.toSec() < 5.0) {
-            // Wait a bit more for the movement to complete
             return;
         }
         
-        // Try to move to the location
         if (!moveToLocation(target.first, target.second)) {
             movement_retry_count++;
             if (movement_retry_count >= max_retries) {
@@ -518,12 +513,10 @@ public:
         ros::Duration elapsed = ros::Time::now() - collection_start_time;
         
         if (elapsed.toSec() >= 5.0) {
-            // Collection complete
             timing_active = false;
             gold_collected[current_gold_target] = true;
             publishStatus("Gold collected successfully!");
             
-            // Count collected gold
             int collected_count = 0;
             for (bool collected : gold_collected) {
                 if (collected) collected_count++;
@@ -533,19 +526,17 @@ public:
             
             if (allGoldCollected()) {
                 publishStatus("All gold collected! Planning exit route");
-                setState(PLANNING); // Will transition to MOVING_TO_PICKUP
+                setState(PLANNING);
             } else {
-                setState(PLANNING); // Find next gold
+                setState(PLANNING);
             }
         } else {
-            // Still collecting, ensure we stay in position
             auto target = gold_locations[current_gold_target];
             if (!isAtLocation(target.first, target.second)) {
                 publishStatus("Robot moved during collection, repositioning");
                 setState(MOVING_TO_GOLD);
                 timing_active = false;
             } else {
-                // Show progress
                 double remaining = 5.0 - elapsed.toSec();
                 ROS_INFO_THROTTLE(1, "Collecting gold... %.1f seconds remaining", remaining);
             }
@@ -562,26 +553,23 @@ public:
         auto target = pickup_locations[selected_pickup];
         
         if (isAtLocation(target.first, target.second)) {
-            publishStatus("Arrived at pickup location, starting exit sequence");
+            publishStatus("Arrived at pickup location, going to the Helicopter");
+            alignRobot();
             setState(EXITING);
             exit_start_time = ros::Time::now();
             timing_active = true;
-            playSong(3); // Play exit song
+            playSong(3);
             return;
         }
         
-        // Check if we should retry movement
         ros::Duration time_since_attempt = ros::Time::now() - last_movement_attempt;
         if (time_since_attempt.toSec() < 5.0) {
-            // Wait a bit more for the movement to complete
             return;
         }
         
-        // Try to move to the pickup location
         if (!moveToLocation(target.first, target.second)) {
             movement_retry_count++;
             if (movement_retry_count >= max_retries) {
-                // Try the other pickup location if available
                 if (pickup_locations.size() > 1) {
                     selected_pickup = (selected_pickup == 0) ? 1 : 0;
                     movement_retry_count = 0;
@@ -603,23 +591,24 @@ public:
             setState(FAILED);
             return;
         }
-        
+
+        ROS_INFO("Pickup location : (%d, %d)",
+                 pickup_locations[selected_pickup].first,
+                 pickup_locations[selected_pickup].second);
+
         ros::Duration elapsed = ros::Time::now() - exit_start_time;
         
         if (elapsed.toSec() >= 5.0) {
-            // Exit complete
             timing_active = false;
-            publishStatus("Exit sequence complete - Challenge successful!");
+            publishStatus("Exit sequence complete");
             setState(COMPLETED);
         } else {
-            // Still exiting, ensure we stay in position
             auto target = pickup_locations[selected_pickup];
             if (!isAtLocation(target.first, target.second)) {
                 publishStatus("Robot moved during exit, repositioning");
                 setState(MOVING_TO_PICKUP);
                 timing_active = false;
             } else {
-                // Show progress
                 double remaining = 5.0 - elapsed.toSec();
                 ROS_INFO_THROTTLE(1, "Exiting maze... %.1f seconds remaining", remaining);
             }
@@ -627,23 +616,14 @@ public:
     }
     
     void handleCompleted() {
-        publishStatus("Challenge completed successfully!");
-        playSong(4); // Play success song
         ROS_INFO("=== CHALLENGE COMPLETED SUCCESSFULLY ===");
-        
-        // Print summary
-        ROS_INFO("Gold locations visited: %zu", gold_locations.size());
-        ROS_INFO("Pickup location used: (%d, %d)", 
-                 pickup_locations[selected_pickup].first,
-                 pickup_locations[selected_pickup].second);
+        playSong(4);
     }
     
     void handleFailed() {
-        publishStatus("Challenge execution failed");
-        playSong(5); // Play failure song
         ROS_ERROR("=== CHALLENGE EXECUTION FAILED ===");
+        playSong(5);
         
-        // Print failure summary
         int collected_count = 0;
         for (bool collected : gold_collected) {
             if (collected) collected_count++;
@@ -657,7 +637,7 @@ int main(int argc, char** argv) {
     
     ChallengeExecutor executor;
     
-    ROS_INFO("=== SARTING DRY CHALLENGE===");
+    ROS_INFO("=== SARTING DRY CHALLENGE ===");
     ROS_INFO("Ready to execute gold collection challenge");
     
     executor.executeStateMachine();

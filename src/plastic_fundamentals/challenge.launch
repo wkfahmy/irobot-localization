@@ -1,24 +1,10 @@
-<launch>    
-    <!-- Include the planning launch file to get localization and path planning -->
-
-    <!-- Challenge Executor Node -->
+<launch>
     <node name="challenge_dry" pkg="plastic_fundamentals" type="challenge_dry" output="screen">
-
-        <!-- File paths for gold and pickup locations -->
         <param name="gold_file" value="$(find plastic_fundamentals)/gold.txt"/>
         <param name="pickup_file" value="$(find plastic_fundamentals)/pickup.txt"/>
         
-        <!-- Challenge parameters -->
         <param name="max_retries" value="3"/>
         <param name="collection_time" value="5.0"/>
         <param name="exit_time" value="5.0"/>
     </node>
-    
-    <!-- Parameters -->
-    <param name="use_sim_time" value="false"/>
-    <param name="log_level" value="INFO"/>
-    
-    <!-- Remappings if needed -->
-    <!-- remap from="/challenge_status" to="/challenge/status"/ -->
-    
 </launch>

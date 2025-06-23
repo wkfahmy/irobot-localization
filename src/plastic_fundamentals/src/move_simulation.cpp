@@ -60,7 +60,7 @@ void lidarCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     angle_increment = msg->angle_increment;
     lidar_data_received = true;
 
-    /*for (size_t i = 0; i < msg->ranges.size(); ++i) {
+    for (size_t i = 0; i < msg->ranges.size(); ++i) {
         double angle = msg->angle_min + i * msg->angle_increment;
 
         // Garder seulement les angles proches de 0° (devant)
@@ -75,7 +75,7 @@ void lidarCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
             }
         }
     }
-    will_hit_obstacle = false;*/
+    will_hit_obstacle = false;
 }
 
 void resetEncoders() {
@@ -113,10 +113,10 @@ float calculateLateralError() {
         float r = lidar_ranges[i];
         if (r < 0.1f || r > MAX_SIDE_RANGE || std::isnan(r)) continue;
 
-        if (angle > 1.396 && angle < 1.745) {
+        if (angle > 1.396 && angle < 1.745) { // +90° ±10°
             left_min = std::min(left_min, r);
         }
-        if (angle > -1.745 && angle < -1.396) {
+        if (angle > -1.745 && angle < -1.396) { // -90° ±10°
             right_min = std::min(right_min, r);
         }
     }
@@ -127,8 +127,9 @@ float calculateLateralError() {
     bool right_valid = right_min < MAX_SIDE_RANGE;
 
     if (left_valid && right_valid) {
+        // Use both sides to center
         float lateral_error = (right_min - left_min) / 2.0f;
-        return clamp(lateral_error, -0.2f, 0.2f);
+        return clamp(lateral_error, -0.2f, 0.2f); // Optional clamp to limit overreaction
     } else if (left_valid) {
         return DESIRED_DISTANCE - left_min;
     } else if (right_valid) {
@@ -148,7 +149,7 @@ float calculateFrontDistance() {
         float r = lidar_ranges[i];
         if (r < 0.1f || r > MAX_LIDAR_RANGE || std::isnan(r)) continue;
 
-        if (angle > -0.26 && angle < 0.26) {
+        if (angle > -0.26 && angle < 0.26) {  // -15° to +15°
             front_min = std::min(front_min, r);
         }
     }
@@ -161,13 +162,11 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
     ros::Rate rate(1000);
     create_fundamentals::DiffDrive diffDriveSrv;
 
-    bool correctionEnabled = req.correction;
-
     double ticks = getRotationTicks(fabs(req.angle));
     double side = (req.angle > 0) ? 1.0 : -1.0;
     resetEncoders();
 
-    double small_margin = ticks * 0.015;
+    double small_margin = ticks * 0.05;
 
     while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok() && !isFlying) {
         double error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2.0);
@@ -180,10 +179,8 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
             correction = clamp(1.0 - fabs(leftTicks) / fabs(rightTicks), -0.5, 0.5);
         }
 
-        if (correctionEnabled) {
-            float lateral_error = calculateLateralError();
-            correction += clamp(KP_LATERAL * lateral_error, -0.2f, 0.2f);
-        }
+        float lateral_error = calculateLateralError();
+        correction += clamp(KP_LATERAL * lateral_error, -0.2f, 0.2f);
 
         diffDriveSrv.request.left = -side * error_based_speed * (1.0 + correction / 2.0);
         diffDriveSrv.request.right =  side * error_based_speed * (1.0 - correction / 2.0);
@@ -212,13 +209,11 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
     ros::Rate rate(1000);
     create_fundamentals::DiffDrive diffDriveSrv;
 
-    bool correctionEnabled = req.correction;
-
     double ticks = getTranslationTicks(fabs(req.distance));
     double side = (req.distance > 0) ? 1.0 : -1.0;
     resetEncoders();
 
-    double small_margin = ticks * 0.005;
+    double small_margin = ticks * 0.00;
 
     while ((abs(leftTicks) + abs(rightTicks)) / 2.0 < ticks - small_margin && ros::ok() && !isFlying && !will_hit_obstacle) {
         double error = fabs(ticks - (abs(leftTicks) + abs(rightTicks)) / 2.0);
@@ -235,20 +230,18 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
             error_based_speed *= 0.5;
         }
 
-        double correction = 0.0;
+        double encoder_correction = 0.0;
         if (fabs(rightTicks) > 1e-3) {
-            correction = clamp(1.0 - fabs(leftTicks)/fabs(rightTicks), -0.5, 0.5);
+            encoder_correction = clamp(1.0 - fabs(leftTicks)/fabs(rightTicks), -0.5, 0.5);
         }
 
-        if (correctionEnabled) {
-            float lateral_error = calculateLateralError();
-            float lidar_correction = clamp(KP_LATERAL * lateral_error, -MAX_CORRECTION, MAX_CORRECTION);
+        float lateral_error = calculateLateralError();
+        float lidar_correction = clamp(KP_LATERAL * lateral_error, -MAX_CORRECTION, MAX_CORRECTION);
 
-            correction += lidar_correction;
-        }
+        double total_correction = encoder_correction + lidar_correction;
 
-        diffDriveSrv.request.left = side * error_based_speed * (1.0 + correction / 2.0);
-        diffDriveSrv.request.right = side * error_based_speed * (1.0 - correction / 2.0);
+        diffDriveSrv.request.left = side * error_based_speed * (1.0 + total_correction / 2.0);
+        diffDriveSrv.request.right = side * error_based_speed * (1.0 - total_correction / 2.0);
 
         diffDriveClient.call(diffDriveSrv);
 

@@ -7,6 +7,7 @@
 #include <create_fundamentals/PlaySong.h>
 #include <create_fundamentals/StoreSong.h>
 #include <plastic_fundamentals/Move.h>
+#include <plastic_fundamentals/Align.h>
 #include <plastic_fundamentals/Grid.h>
 #include <plastic_fundamentals/Row.h>
 #include <plastic_fundamentals/Cell.h>
@@ -31,22 +32,22 @@ constexpr double CELL_SIZE = 0.8;
 int num_rows = 0;
 int num_cols = 0;
 
-int min_particles = 1000;
-int max_particles = 5000;
-int current_num_particles = 5000;
+int min_particles = 500;
+int max_particles = 3000;
+int current_num_particles = 1000;
 
 double uncertainty = std::numeric_limits<double>::infinity();
 
 constexpr double XY_INIT_NOISE = 0.1;
-constexpr double THETA_INIT_NOISE = 0.2;
+constexpr double THETA_INIT_NOISE = 0.4;
 
 constexpr double XY_MOTION_NOISE = 0.05;
-constexpr double THETA_MOTION_NOISE = 0.2 ;
+constexpr double THETA_MOTION_NOISE = 0.2;
 
 constexpr double XY_RESAMPLE_NOISE = 0.05;
 constexpr double THETA_RESAMPLE_NOISE = 0.2;
 
-constexpr double RESAMPLE_THRESHOLD = 0.3;
+constexpr double RESAMPLE_THRESHOLD = 0.1;
 
 double leftTicks = 0;
 double rightTicks = 0;
@@ -72,11 +73,12 @@ struct Particle {
 
 std::vector<std::vector<Particle>> clusters;
 
-ros::ServiceClient* storeSong;
-ros::ServiceClient* playSong;
+ros::ServiceClient storeSong;
+ros::ServiceClient playSong;
 
-ros::ServiceClient* rotateClient;
-ros::ServiceClient* translateClient;
+ros::ServiceClient rotateClient;
+ros::ServiceClient translateClient;
+ros::ServiceClient alignClient;
 
 create_fundamentals::DiffDrive diffDriveSrv;
 ros::ServiceClient* diffDriveClient;
@@ -85,7 +87,7 @@ Particle current_pose;
 
 ros::ServiceClient marker;
 
-
+int lost_counter = 0;
 bool is_localized = false;
 bool first_localization = true;
 
@@ -165,7 +167,7 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
 
     plastic_fundamentals::PublishMarker srv;
 
-    srv.request.marker_type = "PointMarker";
+    srv.request.marker_type = "PointsMarker";
 
     for (auto& p : particles) {
         plastic_fundamentals::Point pt;
@@ -190,7 +192,7 @@ void updateParticlesMotion(double distance, double angle) {
 
     plastic_fundamentals::PublishMarker srv;
 
-    srv.request.marker_type = "PointMarker";
+    srv.request.marker_type = "PointsMarker";
 
     for (auto& p : particles) {
         if (distance != 0) {
@@ -247,74 +249,68 @@ double normalizeWeights() {
 }
 
 void resampleParticles(double n_eff) {
-    if (n_eff > RESAMPLE_THRESHOLD * current_num_particles && particles.size() == current_num_particles) {
+    if (n_eff > RESAMPLE_THRESHOLD * particles.size() && particles.size() == current_num_particles) {
         return;
     }
 
-    ROS_INFO("Resampling particles, effective particles: %.2f", n_eff);
-
-    std::vector<Particle> new_particles;
-    new_particles.reserve(particles.size());
-
-    std::vector<double> cumulative_sum(particles.size());
-    cumulative_sum[0] = particles[0].weight;
+    std::shuffle(particles.begin(), particles.end(), random_generator);
+    std::vector<double> cumulative(particles.size());
+    cumulative[0] = particles[0].weight;
     for (size_t i = 1; i < particles.size(); ++i) {
-        cumulative_sum[i] = cumulative_sum[i-1] + particles[i].weight;
+        cumulative[i] = cumulative[i - 1] + particles[i].weight;
     }
 
-    std::uniform_real_distribution<double> dist(0, 1.0 / particles.size());
-    double r = dist(random_generator);
+    std::uniform_real_distribution<double> dist_r(0.0, 1.0 / particles.size());
+    std::normal_distribution<double> noise_xy(0.0, XY_RESAMPLE_NOISE);
+    std::normal_distribution<double> noise_theta(0.0, THETA_RESAMPLE_NOISE);
+    std::uniform_real_distribution<double> rand_x(0, num_cols * 0.8);
+    std::uniform_real_distribution<double> rand_y(0, num_rows * 0.8);
+    std::uniform_real_distribution<double> rand_theta(-M_PI, M_PI);
+
+    const double RANDOM_PARTICLE_RATIO = 0.3;
+    int num_random = static_cast<int>(RANDOM_PARTICLE_RATIO * current_num_particles);
+    int num_resampled = current_num_particles - num_random;
+
+    std::vector<Particle> new_particles;
+    new_particles.reserve(current_num_particles);
+
+    double r = dist_r(random_generator);
+    double c = cumulative[0];
     size_t i = 0;
 
-    std::normal_distribution<double> pos_noise(0, XY_RESAMPLE_NOISE);
-    std::normal_distribution<double> ang_noise(0, THETA_RESAMPLE_NOISE);
-
-    for (size_t m = 0; m < current_num_particles; ++m) {
-        double u = r + m * (1.0 / current_num_particles);
-        while (u > cumulative_sum[i] && i < particles.size() - 1) {
+    for (int m = 0; m < num_resampled; ++m) {
+        double U = r + m * (1.0 / particles.size());
+        while (U > c && i < particles.size() - 1) {
             i++;
+            c = cumulative[i];
         }
 
         Particle p = particles[i];
-
-        p.x += pos_noise(random_generator);
-        p.y += pos_noise(random_generator);
-        p.theta += ang_noise(random_generator);
-
+        p.x += noise_xy(random_generator);
+        p.y += noise_xy(random_generator);
+        p.theta += noise_theta(random_generator);
         while (p.theta > M_PI) p.theta -= 2 * M_PI;
         while (p.theta <= -M_PI) p.theta += 2 * M_PI;
-
-        new_particles.push_back(particles[i]);
+        p.weight = 1.0 / current_num_particles;
+        new_particles.push_back(p);
     }
 
-    /*if (n_eff < 0.2 * particles.size()) {
-        std::uniform_real_distribution<double> dist_x(0, num_cols * 0.8);  // Limiter à la taille de la carte
-        std::uniform_real_distribution<double> dist_y(0, num_rows * 0.8);
-        std::uniform_real_distribution<double> dist_theta(-M_PI, M_PI);
+    for (int k = 0; k < num_random; ++k) {
+        Particle p;
+        p.x = rand_x(random_generator);
+        p.y = rand_y(random_generator);
+        p.theta = rand_theta(random_generator);
+        p.weight = 1.0 / current_num_particles;
+        new_particles.push_back(p);
+    }
 
-        // Générer des particules uniformément réparties dans la carte (maze)
-        for (int i = 0; i < particles.size(); ++i) {
-            Particle p;
-            p.x = dist_x(random_generator);
-            p.y = dist_y(random_generator);
-            p.theta = dist_theta(random_generator);
-            p.weight = 1.0 / particles.size();  // Weight uniforme
-            new_particles.push_back(p);
-        }
-        ROS_INFO("Generated uniform particles for relocalization.");
-    }*/
-
-    particles = new_particles;
-
-    double uniform_weight = 1.0 / current_num_particles;
+    particles.resize(current_num_particles);
+    particles = std::move(new_particles);
 
     plastic_fundamentals::PublishMarker srv;
-
-    srv.request.marker_type = "PointMarker";
+    srv.request.marker_type = "PointsMarker";
 
     for (auto& p : particles) {
-        p.weight = uniform_weight;
-
         plastic_fundamentals::Point pt;
         pt.x = p.x;
         pt.y = p.y;
@@ -463,88 +459,100 @@ std::vector<double> calculateExpectedScan(const Particle& p, const std::vector<d
 }
 
 double updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
-    std::vector<double> angles;
-    for (size_t i = 20; i < scan->ranges.size() - 20; i += 20) {
-        angles.push_back(scan->angle_min + i * scan->angle_increment);
+    constexpr int step = 10;
+    constexpr double sigma = 0.1;
+    constexpr double sigma2_inv = 1.0 / (sigma * sigma);
+    const int num_beams = (scan->ranges.size() - 4 * step) / step;
+
+    std::vector<double> angles(num_beams);
+    for (int j = 0; j < num_beams; ++j) {
+        int i = 20 + j * step;
+        angles[j] = scan->angle_min + i * scan->angle_increment;
+    }
+
+    std::vector<float> valid_ranges(num_beams);
+    std::vector<bool> is_valid(num_beams, false);
+    for (int j = 0; j < num_beams; ++j) {
+        int i = 20 + j * step;
+        float measured = scan->ranges[i];
+        if (!std::isnan(measured) && measured >= scan->range_min && measured <= scan->range_max) {
+            valid_ranges[j] = measured;
+            is_valid[j] = true;
+        }
     }
 
     for (auto& p : particles) {
-        std::vector<double> expected_scan = calculateExpectedScan(p, angles);
+        std::vector<double> expected = calculateExpectedScan(p, angles);
 
-        double likelihood = 1.0;
+        double log_likelihood = 0.0;
         int valid_rays = 0;
 
-        for (size_t i = 0, j = 0; i < scan->ranges.size() && j < angles.size(); i += 20, ++j) {
-            float measured = scan->ranges[i];
-            double expected = expected_scan[j];
+        for (int j = 0; j < num_beams; ++j) {
+            double expected_val = expected[j];
 
-            if (std::isnan(measured) || measured < scan->range_min || measured > scan->range_max) {
-                continue;
+            if (is_valid[j]) {
+                double diff = valid_ranges[j] - expected_val;
+                log_likelihood += -0.5 * diff * diff * sigma2_inv;
+                ++valid_rays;
+            } else {
+
+                if (expected_val < scan->range_max - 0.03) {
+                    log_likelihood += -1.0;
+                } else {
+                    log_likelihood += 1.0;
+                }
+                ++valid_rays;
             }
-
-            double sigma = 0.1;
-            double diff = measured - expected;
-            double prob = exp(-0.5 * diff * diff / (sigma * sigma));
-
-            likelihood *= prob;
-            valid_rays++;
         }
 
-        if (valid_rays > 0) {
-            p.weight *= pow(likelihood, 1.0 / valid_rays);
-        } else {
-            p.weight *= 0.3;
-        }
+        p.weight *= (valid_rays > 0) ? std::exp(log_likelihood / valid_rays) : 0.5;
     }
 
     return normalizeWeights();
 }
 
-Particle estimatePose() {
+Particle estimatePose(int top_k = 30) {
     Particle pose;
 
-    auto max_it = std::max_element(particles.begin(), particles.end(),
-                                  [](const Particle& a, const Particle& b) {
-                                      return a.weight < b.weight;
-                                  });
+    if (particles.empty()) return pose;
 
-    if (max_it != particles.end()) {
-        pose.x = max_it->x;
-        pose.y = max_it->y;
-        pose.theta = max_it->theta;
-        pose.row = max_it->row;
-        pose.col = max_it->col;
-    } else {
-        double sum_x = 0, sum_y = 0;
-        double sum_sin_theta = 0, sum_cos_theta = 0;
-        double sum_weights = 0;
+    std::vector<Particle> sorted_particles = particles;
 
-        for (const auto& p : particles) {
-            sum_x += p.weight * p.x;
-            sum_y += p.weight * p.y;
-            sum_sin_theta += p.weight * sin(p.theta);
-            sum_cos_theta += p.weight * cos(p.theta);
-            sum_weights += p.weight;
-        }
+    std::partial_sort(sorted_particles.begin(),
+                      sorted_particles.begin() + std::min(top_k, (int)sorted_particles.size()),
+                      sorted_particles.end(),
+                      [](const Particle& a, const Particle& b) {
+                          return a.weight > b.weight;
+                      });
 
-        if (sum_weights > 0) {
-            double avg_x = sum_x / sum_weights;
-            double avg_y = sum_y / sum_weights;
-            double avg_theta = atan2(sum_sin_theta, sum_cos_theta);
-            double normalized_theta = avg_theta;
-            while (normalized_theta < 0) normalized_theta += 2 * M_PI;
+    double sum_x = 0.0, sum_y = 0.0;
+    double sum_sin_theta = 0.0, sum_cos_theta = 0.0;
+    double sum_weights = 0.0;
 
-            pose.x = avg_x;
-            pose.y = avg_y;
-            pose.theta = normalized_theta;
+    int k = std::min(top_k, (int)sorted_particles.size());
 
-            pose.row = static_cast<int>(avg_x / CELL_SIZE);
-            pose.col = static_cast<int>(avg_y / CELL_SIZE);
-        }
+    for (int i = 0; i < k; ++i) {
+        const Particle& p = sorted_particles[i];
+        sum_x += p.weight * p.x;
+        sum_y += p.weight * p.y;
+        sum_sin_theta += p.weight * sin(p.theta);
+        sum_cos_theta += p.weight * cos(p.theta);
+        sum_weights += p.weight;
+    }
+
+    if (sum_weights > 0.0) {
+        pose.x = sum_x / sum_weights;
+        pose.y = sum_y / sum_weights;
+        pose.theta = atan2(sum_sin_theta / sum_weights, sum_cos_theta / sum_weights);
+        if (pose.theta < 0) pose.theta += 2 * M_PI;
+
+        pose.row = static_cast<int>(pose.x / CELL_SIZE);
+        pose.col = static_cast<int>(pose.y / CELL_SIZE);
     }
 
     return pose;
 }
+
 
 Particle estimatePoseFromCluster(const std::vector<Particle>& particles, double& max_weight, double cluster_radius = 0.3) {
     int best_cluster_size = 0;
@@ -607,28 +615,30 @@ void absEncoderCallback(const plastic_fundamentals::AbsEncoder::ConstPtr& msg) {
     updateParticlesMotion(d, dtheta);
 }
 
-bool rotate(double angle_rad, double speed) {
+bool rotate(double angle_rad, double speed, bool correction = false) {
     plastic_fundamentals::Move srv;
     srv.request.angle = angle_rad;
     srv.request.speed = speed;
-    bool success = rotateClient->call(srv);
+    srv.request.correction = correction;
+    bool success = rotateClient.call(srv);
     lastAbsLeft = 0;
     lastAbsRight = 0;
     return success;
 }
 
-bool translate(double distance, double speed) {
+bool translate(double distance, double speed, bool correction = false) {
     plastic_fundamentals::Move srv;
     srv.request.distance = distance;
     srv.request.speed = speed;
-    bool success = translateClient->call(srv);
+    srv.request.correction = correction;
+    bool success = translateClient.call(srv);
     lastAbsLeft = 0;
     lastAbsRight = 0;
     return success;
 }
 
 bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_threshold) {
-    double angle_range = M_PI / 24.0;  // ±15 degrees
+    double angle_range = M_PI / 24.0;
 
     int start_index = std::max(0, static_cast<int>((-angle_range - msg->angle_min) / msg->angle_increment));
     int end_index = std::min(static_cast<int>((angle_range - msg->angle_min) / msg->angle_increment), static_cast<int>(msg->ranges.size()) - 1);
@@ -646,14 +656,7 @@ bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_th
         }
     }
 
-    double blocked_ratio = static_cast<double>(blocked_rays) / valid_rays;
-    if (blocked_ratio < 0.4) {
-        ROS_INFO("Path is clear: %d/%d rays blocked", blocked_rays, valid_rays);
-    } else {
-        ROS_INFO("Path is blocked: %d/%d rays blocked", blocked_rays, valid_rays);
-    }
-
-    return blocked_ratio < 0.4;
+    return static_cast<double>(blocked_rays) / valid_rays < 0.4;
 }
 
 int getMostOpenDirection(const sensor_msgs::LaserScan::ConstPtr& msg) {
@@ -724,7 +727,7 @@ void translate_to(double target_x, double target_y, double speed) {
         if (distance < tolerance) break;
 
         double theta_to_target = std::atan2(dy, dx);
-
+        rotate_to(theta_to_target, speed);
         translate(distance, speed);
         ros::spinOnce();
         rate.sleep();
@@ -741,33 +744,24 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundam
 
         int target_grid_x = grid_x;
         int target_grid_y = grid_y;
-        double target_theta = 0.0;
 
         if (dir == 0) {
             target_grid_y += 1;
-            target_theta = M_PI_2;
         } else if (dir == 1) {
             target_grid_x -= 1;
-            target_theta = M_PI;
         } else if (dir == 2) {
             target_grid_y -= 1;
-            target_theta = -M_PI_2;
         } else if (dir == 3) {
             target_grid_x += 1;
-            target_theta = 0.0;
         }
 
         double target_x = target_grid_x * CELL_SIZE + 0.4;
         double target_y = target_grid_y * CELL_SIZE + 0.4;
 
-
-        rotate_to(target_theta, 5.0);
-
-        translate_to(target_x, target_y, 7.0);
+        translate_to(target_x, target_y, 10.0);
 
         grid_x = target_grid_x;
         grid_y = target_grid_y;
-        theta = target_theta;
     }
 
     res.success = true;
@@ -790,10 +784,10 @@ void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
 void adaptParticleCount(double uncertainty) {
     int previous = current_num_particles;
 
-    if (uncertainty > 0.5) {
+    if (uncertainty > 1.5 && lost_counter > 5) {
         current_num_particles = std::min(current_num_particles * 2, max_particles);
     }
-    else if (uncertainty < 0.2 && current_num_particles > min_particles) {
+    else if (uncertainty < 0.4 && current_num_particles > min_particles) {
         current_num_particles = std::max(current_num_particles / 2, min_particles);
     }
 
@@ -802,107 +796,48 @@ void adaptParticleCount(double uncertainty) {
     }
 }
 
-std::vector<std::vector<Particle>> getClusters(const std::vector<Particle>& particles, double radius) {
-    std::vector<bool> visited(particles.size(), false);
-    std::vector<std::vector<Particle>> clusters;
+void calculateUncertainty(double& spatial_uncertainty, double& dominant_ratio) {
+    double mean_x = 0.0, mean_y = 0.0;
+    double total_weight = 0.0;
 
-    for (size_t i = 0; i < particles.size(); ++i) {
-        if (visited[i]) continue;
+    for (const auto& p : particles) {
+        mean_x += p.x * p.weight;
+        mean_y += p.y * p.weight;
+        total_weight += p.weight;
+    }
+    if (total_weight == 0.0) return;
 
-        std::vector<Particle> cluster;
-        cluster.push_back(particles[i]);
-        visited[i] = true;
+    mean_x /= total_weight;
+    mean_y /= total_weight;
 
-        std::queue<int> to_check;
-        to_check.push(i);
+    double var_x = 0.0, var_y = 0.0;
+    for (const auto& p : particles) {
+        var_x += p.weight * (p.x - mean_x) * (p.x - mean_x);
+        var_y += p.weight * (p.y - mean_y) * (p.y - mean_y);
+    }
+    var_x /= total_weight;
+    var_y /= total_weight;
 
-        while (!to_check.empty()) {
-            int idx = to_check.front();
-            to_check.pop();
+    spatial_uncertainty = std::sqrt(var_x + var_y);
 
-            for (size_t j = 0; j < particles.size(); ++j) {
-                if (visited[j]) continue;
-                double dist = std::sqrt(std::pow(particles[j].x - particles[idx].x, 2) +
-                                       std::pow(particles[j].y - particles[idx].y, 2));
-                if (dist < radius) {
-                    visited[j] = true;
-                    cluster.push_back(particles[j]);
-                    to_check.push(j);
-                }
-            }
+    double weightmap[6][6] = {{0.0}};
+    for (const auto& p : particles) {
+        int i = p.row;
+        int j = p.col;
+        if (i >= 0 && i < 6 && j >= 0 && j < 6) {
+            weightmap[i][j] += p.weight;
         }
-
-        clusters.push_back(cluster);
     }
 
-    return clusters;
-}
+    double max_cell_weight = 0.0;
+    for (int i = 0; i < 6; ++i)
+        for (int j = 0; j < 6; ++j)
+            max_cell_weight = std::max(max_cell_weight, weightmap[i][j]);
 
-double calculateClusterUncertainty(const std::vector<Particle>& cluster) {
-    double sum_x = 0.0, sum_y = 0.0, sum_theta = 0.0;
-    double sum_x_squared = 0.0, sum_y_squared = 0.0, sum_theta_squared = 0.0;
-
-    for (const auto& p : cluster) {
-        sum_x += p.x;
-        sum_y += p.y;
-        sum_theta += p.theta;
-
-        sum_x_squared += p.x * p.x;
-        sum_y_squared += p.y * p.y;
-        sum_theta_squared += p.theta * p.theta;
-    }
-
-    size_t cluster_size = cluster.size();
-    double mean_x = sum_x / cluster_size;
-    double mean_y = sum_y / cluster_size;
-    double mean_theta = sum_theta / cluster_size;
-
-    double variance_x = (sum_x_squared / cluster_size) - (mean_x * mean_x);
-    double variance_y = (sum_y_squared / cluster_size) - (mean_y * mean_y);
-    double variance_theta = (sum_theta_squared / cluster_size) - (mean_theta * mean_theta);
-
-    double stddev_x = std::sqrt(variance_x);
-    double stddev_y = std::sqrt(variance_y);
-    double stddev_theta = std::sqrt(variance_theta);
-
-    return stddev_x + stddev_y + stddev_theta;
-}
-
-double calculateGlobalUncertainty(const std::vector<Particle>& particles, double& cluster_ratio) {
-    clusters = getClusters(particles, 0.3);
-
-    double total_uncertainty = 0.0;
-    double total_particles_in_clusters = 0.0;
-    cluster_ratio = 0.0;
-
-    for (const auto& cluster : clusters) {
-        double cluster_uncertainty = calculateClusterUncertainty(cluster);
-        total_uncertainty += cluster_uncertainty * cluster.size();
-        total_particles_in_clusters += cluster.size();
-    }
-
-    if (!clusters.empty()) {
-        cluster_ratio = static_cast<double>(clusters.front().size()) / total_particles_in_clusters;
-    }
-
-    double uncertainty = total_uncertainty / total_particles_in_clusters;
-    if (uncertainty < 0.01) {
-        uncertainty = 0.01;
-    }
-    return uncertainty;
-}
-
-bool isRobotLost(double max_weight, double avg_weight, double n_eff, int particle_count, double cluster_ratio) {
-    bool low_confidence = max_weight < 0.01 && avg_weight < 0.005;
-    bool low_effective = n_eff < 0.3 * particle_count;
-    bool no_dominant_cluster = cluster_ratio < 0.4;
-
-    return low_confidence && low_effective && no_dominant_cluster;
+    dominant_ratio = max_cell_weight / total_weight;
 }
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    //processing_done = false;
-
     if (!map_data || particles.empty()) return;
 
     pathClear = isClearPath(msg, 0.8);
@@ -911,16 +846,18 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     double n_eff = updateParticlesSensor(msg);
     double effective_particles_threshold = 0.4 * current_num_particles;
 
-    double cluster_ratio = 0.0;
-    uncertainty = calculateGlobalUncertainty(particles, cluster_ratio);
-    adaptParticleCount(uncertainty);
+    double spatial_uncertainty = 0.0;
+    double dominant_ratio = 0.0;
+    calculateUncertainty(spatial_uncertainty, dominant_ratio);
+    adaptParticleCount(spatial_uncertainty);
 
     resampleParticles(n_eff);
 
     current_pose = estimatePose();
 
-    if (uncertainty <= 0.2 && cluster_ratio > 0.7) {
+    if ((spatial_uncertainty < 0.65 && dominant_ratio > 0.45) || (spatial_uncertainty < 0.8 && dominant_ratio > 0.8)) {
         is_localized = true;
+        lost_counter = 0;
 
         plastic_fundamentals::Pose current_pose_msg;
         current_pose_msg.row = current_pose.row;
@@ -929,60 +866,63 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 
         pose_pub.publish(current_pose_msg);
 
-        ROS_INFO("Localized at row=%d, column=%d, orientation=%d, angle=%f (confidence=%.3f)",
-                 current_pose.row, current_pose.col, current_pose_msg.orientation, current_pose.theta, uncertainty);
+
+        plastic_fundamentals::PublishMarker srv;
+
+        srv.request.marker_type = "PointMarker";
+
+        plastic_fundamentals::Point pt;
+        pt.x = current_pose.x;
+        pt.y = current_pose.y;
+        srv.request.point = pt;
+
+        marker.call(srv);
+
+        ROS_INFO("Localized at row=%d, column=%d, orientation=%d (confidence=%.3f ratio=%.3f)",
+                 current_pose.row, current_pose.col, current_pose_msg.orientation, spatial_uncertainty, dominant_ratio);
 
         if (first_localization) {
             first_localization = false;
             create_fundamentals::PlaySong play_srv;
             play_srv.request.number = 1;
-            if (playSong->call(play_srv)) {
+            if (playSong.call(play_srv)) {
                 ROS_INFO("Guile theme playing!");
             } else {
                 ROS_ERROR("Failed to play song.");
             }
         }
-    } else {
-        is_localized = false;
-        ROS_WARN("Localization not yet achieved, row=%d, column=%d, orientation=%d, angle=%f (confidence=%.3f)",
-                         current_pose.row, current_pose.col, angleToDirection(current_pose.theta), current_pose.theta, uncertainty);
-
-
+    } else if (spatial_uncertainty > 1.2 || dominant_ratio < 0.2) {
+        lost_counter++;
+        if (lost_counter > 10) {
+            ROS_WARN("Localization lost, resetting particles");
+            lost_counter = 0;
+            is_localized = false;
+        }
+        ROS_WARN("Localization not achieved, row=%d, column=%d, orientation=%d (confidence=%.3f ratio=%.3f)",
+                         current_pose.row, current_pose.col, angleToDirection(current_pose.theta), spatial_uncertainty, dominant_ratio);
     }
-
-    //processing_done = true;
-    /*if (is_localized && isRobotLost(max_weight, avg_weight, n_eff, particles.size(), cluster_ratio)) {
-        is_localized = false;
-        ROS_WARN("Localization lost! Resetting pose...");
-    }*/
 }
 
 void localizationRoutine(ros::Rate rate) {
     LocalizationPhase localization_phase = SPIN;
     double move_distance = 0.8;
 
-    while (ros::ok() && !processing_done) {
-        if (is_localized) {
-            processing_done = true;
-            ROS_INFO("Localization complete, publishing pose and waiting");
+    while (ros::ok() && !is_localized) {
+        if (pathClear) {
+            localization_phase = MOVE;
         } else {
-            if (pathClear) {
-                localization_phase = MOVE;
-            } else {
-                localization_phase = SPIN;
-            }
+            localization_phase = SPIN;
+        }
 
-            switch (localization_phase) {
-                case SPIN:
-                    ROS_INFO("Rotation robot to cover more area...");
-                    rotate(openDirection * M_PI / 2, 7.0);
-                    ros::Duration(4.0).sleep();
-                    break;
-                case MOVE:
-                    ROS_INFO("Moving robot to cover more area...");
-                    translate(move_distance, 10.0);
-                    break;
-            }
+        switch (localization_phase) {
+            case SPIN:
+                ROS_INFO("Rotation robot to cover more area...");
+                rotate(openDirection * M_PI / 2, 7.0, true);
+                break;
+            case MOVE:
+                ROS_INFO("Moving robot to cover more area...");
+                translate(move_distance, 10.0, true);
+                break;
         }
 
         ros::spinOnce();
@@ -1034,12 +974,25 @@ void initSong() {
     create_fundamentals::StoreSong store_srv;
     store_srv.request.number = 1;
     store_srv.request.song = guile_song;
-    if (storeSong->call(store_srv)) {
+    if (storeSong.call(store_srv)) {
         ROS_INFO("Guile theme uploaded!");
     } else {
         ROS_ERROR("Failed to upload song.");
     }
 }
+
+std::mutex align_mutex;
+
+void alignRobot() {
+    std::lock_guard<std::mutex> lock(align_mutex);
+    plastic_fundamentals::Align srv;
+    if (alignClient.call(srv)) {
+        ROS_INFO("Robot successfully aligned");
+    } else {
+        ROS_ERROR("Failed to align robot");
+    }
+}
+
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "mcl_localization");
@@ -1047,52 +1000,53 @@ int main(int argc, char** argv) {
 
     //ros::service::waitForService("store_song");
     //ros::service::waitForService("play_song");
+    ros::service::waitForService("/align");
 
-    ros::ServiceClient store_song = nh.serviceClient<create_fundamentals::StoreSong>("store_song");
-    storeSong = &store_song;
-    ros::ServiceClient play_song = nh.serviceClient<create_fundamentals::PlaySong>("play_song");
-    playSong = &play_song;
+    storeSong = nh.serviceClient<create_fundamentals::StoreSong>("store_song");
+    playSong = nh.serviceClient<create_fundamentals::PlaySong>("play_song");
 
     initSong();
 
     marker = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
 
     ros::Subscriber map_sub = nh.subscribe("/map", 1, mapCallback);
-    ros::Subscriber scan_sub = nh.subscribe("/scan_filtered", 10, scanCallback);
+    ros::Subscriber scan_sub = nh.subscribe("/scan_filtered", 1, scanCallback);
 
     ros::Subscriber abs_sub = nh.subscribe("/absolute_encoders", 1, absEncoderCallback);
 
     pose_pub = nh.advertise<plastic_fundamentals::Pose>("/pose", 10);
     particle_pub = nh.advertise<visualization_msgs::MarkerArray>("/particles", 10);
 
-    ros::ServiceClient rotate_client = nh.serviceClient<plastic_fundamentals::Move>("perform_rotation");
-    rotateClient = &rotate_client;
-    ros::ServiceClient translate_client = nh.serviceClient<plastic_fundamentals::Move>("perform_translation");
-    translateClient = &translate_client;
+    rotateClient = nh.serviceClient<plastic_fundamentals::Move>("perform_rotation");
+    translateClient = nh.serviceClient<plastic_fundamentals::Move>("perform_translation");
+
+    alignClient = nh.serviceClient<plastic_fundamentals::Align>("/align");
 
     ros::ServiceServer service = nh.advertiseService("execute_plan", executePlan);
 
     ROS_INFO("MCL localization node started");
 
+    ros::Duration(2).sleep();
+    if (!alignClient.waitForExistence(ros::Duration(5.0))) {
+        ROS_ERROR("align service not available");
+    } else {
+        alignRobot();
+    }
+
     ros::AsyncSpinner spinner(2);
     spinner.start();
 
-
     while (!map_data) {
         ROS_INFO("Waiting for map data to start..");
-        ros::Duration(2).sleep();
+        ros::Duration(0.5).sleep();
 
         ros::spinOnce();
     }
 
-    ros::Rate rate(10);
-
-
-    localizationRoutine(rate);
-
-    ROS_INFO("Localization routine completed, waiting for a plan to execute...");
+    ros::Rate rate(100);
 
     while (ros::ok()) {
+        localizationRoutine(rate);
         ros::spinOnce();
         rate.sleep();
     }

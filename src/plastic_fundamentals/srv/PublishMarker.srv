@@ -3,6 +3,7 @@ string marker_type
 Point[] points
 Line[] lines
 Point robot
+Point point
 ---
 
 bool success

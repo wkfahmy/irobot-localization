@@ -49,6 +49,7 @@ add_service_files(FILES
     PublishMarker.srv
     Move.srv
     MoveToPosition.srv
+    Align.srv
 )
 
 #common commands for building c++ executables and libraries
@@ -90,46 +91,26 @@ add_executable(marker_relay src/marker_relay.cpp)
 target_link_libraries(marker_relay ${catkin_LIBRARIES})
 add_dependencies(marker_relay create_fundamentals_generate_messages_cpp)
 
-add_executable(marker_test src/marker_test.cpp)
-target_link_libraries(marker_test ${catkin_LIBRARIES})
-add_dependencies(marker_test create_fundamentals_generate_messages_cpp)
-
 add_executable(simulator src/simulator.cpp)
 target_link_libraries(simulator ${catkin_LIBRARIES})
 add_dependencies(simulator create_fundamentals_generate_messages_cpp)
 
-add_executable(calibrate src/calibrate.cpp)
-target_link_libraries(calibrate ${catkin_LIBRARIES})
-add_dependencies(calibrate create_fundamentals_generate_messages_cpp)
-
-add_executable(play_guile src/play_guile.cpp)
-target_link_libraries(play_guile ${catkin_LIBRARIES})
-add_dependencies(play_guile ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_executable(challenge_dry src/challenge_dry.cpp)
+target_link_libraries(challenge_dry ${catkin_LIBRARIES})
+add_dependencies(challenge_dry create_fundamentals_generate_messages_cpp)
 
 add_executable(move src/move.cpp)
 target_link_libraries(move ${catkin_LIBRARIES})
-add_dependencies(move ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(move create_fundamentals_generate_messages_cpp)
 
 add_library(graph_utils src/graph_utils.cpp)
 target_link_libraries(graph_utils ${catkin_LIBRARIES})
 add_dependencies(graph_utils ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_library(current_mcl src/current_mcl.cpp)
-target_link_libraries(current_mcl ${catkin_LIBRARIES})
-add_dependencies(current_mcl ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
-
 add_executable(move_to_position src/move_to_position.cpp)
-target_link_libraries(move_to_position
-    graph_utils              
-    ${catkin_LIBRARIES}
-)
-add_dependencies(move_to_position
-    graph_utils              
-    ${${PROJECT_NAME}_EXPORTED_TARGETS}
-    ${catkin_EXPORTED_TARGETS}
-)
+target_link_libraries(move_to_position graph_utils ${catkin_LIBRARIES})
+add_dependencies(move_to_position graph_utils create_fundamentals_generate_messages_cpp)
 
-
-
-
-
+#add_executable(enhanced_align_complete src/enhanced_align_complete.cpp)
+#target_link_libraries(enhanced_align_complete graph_utils ${catkin_LIBRARIES})
+#add_dependencies(enhanced_align_complete graph_utils create_fundamentals_generate_messages_cpp)

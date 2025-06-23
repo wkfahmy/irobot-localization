@@ -6,6 +6,7 @@
 #include <plastic_fundamentals/PublishMarker.h>
 #include <plastic_fundamentals/Point.h>
 #include <plastic_fundamentals/Move.h>
+#include <plastic_fundamentals/Align.h>
 
 #include <cmath>
 #include <vector>
@@ -42,10 +43,13 @@ int min_index;
 int start_index;
 int end_index;
 
+sensor_msgs::LaserScan::ConstPtr last_scan_msg;
+
 bool rotate(double angle_rad, double speed) {
     plastic_fundamentals::Move srv;
     srv.request.angle = angle_rad;
     srv.request.speed = speed;
+    srv.request.correction = false;
     bool success = rotateClient->call(srv);
     return success;
 }
@@ -54,6 +58,7 @@ bool translate(double distance, double speed) {
     plastic_fundamentals::Move srv;
     srv.request.distance = distance;
     srv.request.speed = speed;
+    srv.request.correction = false;
     bool success = translateClient->call(srv);
     return success;
 }
@@ -132,94 +137,97 @@ const double dL    = 0.16;
 std::vector<plastic_fundamentals::Point> obstaclePoints;
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    if (centered || moving) return;
-    if (processing_done) return;  // Ignore further callbacks
+    last_scan_msg = msg;
+}
 
-    if (obstaclePoints.size() != msg->ranges.size()) {
-        obstaclePoints.resize(msg->ranges.size());
-    }
+bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals::Align::Response &res) {
+    ros::spinOnce();
+    int tries = 0;
+    while (tries < 10) {
 
-    min_distance = std::numeric_limits<float>::infinity();
-    min_index = -1;
-
-    for (int i = 0; i < msg->ranges.size(); ++i) {
-		if (i < 16 ||  i > msg->ranges.size() - 16) {
-			obstaclePoints[i].x = std::numeric_limits<double>::infinity();
-            obstaclePoints[i].y = std::numeric_limits<double>::infinity();
-			continue;
-		}
-        float r = msg->ranges[i];
-        if (!isnan(r) && r >= msg->range_min && r <= msg->range_max) {
-            double theta = msg->angle_min + i * msg->angle_increment;
-            double sin_t = sin(theta);
-            double cos_t = cos(theta);
-
-            obstaclePoints[i].x = r * cos_t + dL;
-            obstaclePoints[i].y = r * sin_t;
-
-            if (r < min_distance) {
-                min_distance = r;
-                min_index = i;
-            }
-        } else {
-            obstaclePoints[i].x = std::numeric_limits<double>::infinity();
-            obstaclePoints[i].y = std::numeric_limits<double>::infinity();
+        if (obstaclePoints.size() != last_scan_msg->ranges.size()) {
+            obstaclePoints.resize(last_scan_msg->ranges.size());
         }
-    }
 
-    std::vector<bool> used(obstaclePoints.size(), false);   // to track used points
-    std::vector<Line> lines; // to store detected lines by RANSAC
-    int line_id = 0;
+        min_distance = std::numeric_limits<float>::infinity();
+        min_index = -1;
 
-    while (true) {
-        // RANSAC to find lines
-        Line line;
-        if (!ransacLineFit(obstaclePoints, used, line, RANSAC_DIST_THRESHOLD, RANSAC_MIN_INLIERS, RANSAC_MAX_ITER)) break;
-        lines.push_back(line);
-    }
+        for (int i = 0; i < last_scan_msg->ranges.size(); ++i) {
+		    if (i < 16 ||  i > last_scan_msg->ranges.size() - 16) {
+			    obstaclePoints[i].x = std::numeric_limits<double>::infinity();
+                obstaclePoints[i].y = std::numeric_limits<double>::infinity();
+			    continue;
+		    }
+            float r = last_scan_msg->ranges[i];
+            if (!isnan(r) && r >= last_scan_msg->range_min && r <= last_scan_msg->range_max) {
+                double theta = last_scan_msg->angle_min + i * last_scan_msg->angle_increment;
+                double sin_t = sin(theta);
+                double cos_t = cos(theta);
 
+                obstaclePoints[i].x = r * cos_t + dL;
+                obstaclePoints[i].y = r * sin_t;
 
-    if (lines.empty()) return; // no lines found
+                if (r < min_distance) {
+                    min_distance = r;
+                    min_index = i;
+                }
+            } else {
+                obstaclePoints[i].x = std::numeric_limits<double>::infinity();
+                obstaclePoints[i].y = std::numeric_limits<double>::infinity();
+            }
+        }
 
-    plastic_fundamentals::PublishMarker vis_srv;
-    vis_srv.request.marker_type = "LineMarker";
-    vis_srv.request.lines.clear();
+        std::vector<bool> used(obstaclePoints.size(), false);
+        std::vector<Line> lines;
+        int line_id = 0;
 
-    // For each line found by RANSAC
-    for (const auto& l : lines) {
-        if (l.inliers.size() < 2) continue;
+        while (true) {
+            // RANSAC to find lines
+            Line line;
+            if (!ransacLineFit(obstaclePoints, used, line, RANSAC_DIST_THRESHOLD, RANSAC_MIN_INLIERS, RANSAC_MAX_ITER)) break;
+            lines.push_back(line);
+        }
 
-        int idx1 = l.inliers.front();
-        int idx2 = l.inliers.back();
-        if (idx1 < 0 || idx1 >= obstaclePoints.size() || idx2 < 0 || idx2 >= obstaclePoints.size())
-            continue;
+        if (lines.empty()){
+            res.success = false;
+            return false;
+        }
 
-        plastic_fundamentals::Line seg;
-        seg.x1 = obstaclePoints[idx1].x;
-        seg.y1 = obstaclePoints[idx1].y;
-        seg.x2 = obstaclePoints[idx2].x;
-        seg.y2 = obstaclePoints[idx2].y;
+        plastic_fundamentals::PublishMarker vis_srv;
+        vis_srv.request.marker_type = "LineMarker";
+        vis_srv.request.lines.clear();
 
-        vis_srv.request.lines.push_back(seg);
-    }
+        for (const auto& l : lines) {
+            if (l.inliers.size() < 2) continue;
 
-    // Publish the detected lines
-    if (!marker.call(vis_srv)) {
-        //ROS_ERROR("Failed to call marker_service for found lines!");
-    }
+            int idx1 = l.inliers.front();
+            int idx2 = l.inliers.back();
+            if (idx1 < 0 || idx1 >= obstaclePoints.size() || idx2 < 0 || idx2 >= obstaclePoints.size())
+                continue;
 
-    // Find the pair of perpendicular lines closest to the LiDAR (origin)
-    std::vector<Line> perpendicular_lines;
-    float min_total_distance = 0.8;
-    plastic_fundamentals::Point intersectionPoint;
+            plastic_fundamentals::Line seg;
+            seg.x1 = obstaclePoints[idx1].x;
+            seg.y1 = obstaclePoints[idx1].y;
+            seg.x2 = obstaclePoints[idx2].x;
+            seg.y2 = obstaclePoints[idx2].y;
 
-    plastic_fundamentals::PublishMarker srv;
+            vis_srv.request.lines.push_back(seg);
+        }
 
-    srv.request.marker_type = "PointMarker";
+        marker.call(vis_srv);
 
-    for (size_t i = 0; i < lines.size(); ++i) {
-        for (size_t j = i + 1; j < lines.size(); ++j) {
+        std::vector<Line> perpendicular_lines;
+        std::vector<Line> parallel_lines;
+        float min_total_distance = 0.8;
+        bool perpendicularWalls = false, parallelWalls = false;
+        plastic_fundamentals::Point intersectionPoint;
 
+        plastic_fundamentals::PublishMarker srv;
+
+        srv.request.marker_type = "PointsMarker";
+
+        for (size_t i = 0; i < lines.size(); ++i) {
+            for (size_t j = i + 1; j < lines.size(); ++j) {
                 float A1 = lines[i].a_dash;
                 float B1 = lines[i].b_dash;
                 float C1 = lines[i].c_dash;
@@ -228,6 +236,14 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                 float C2 = lines[j].c_dash;
 
 				float dot = A1 * A2 + B1 * B2;
+                if (fabs(fabs(dot) - 1.0f) < 0.1f) {
+                    parallelWalls = true;
+
+                    parallel_lines.push_back(lines[i]);
+                    parallel_lines.push_back(lines[j]);
+                }
+
+
 				if (fabs(dot) > 0.2) continue;
 
 				float det = A1 * B2 - A2 * B1;
@@ -237,6 +253,7 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
 					float distance = std::sqrt(x * x + y * y);
 
 					if (min_total_distance > distance) {
+					    perpendicularWalls = true;
                     	perpendicular_lines.clear();
 						min_total_distance = distance;
                     	intersectionPoint.x = x;
@@ -246,94 +263,129 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
                     	perpendicular_lines.push_back(lines[j]);
 
 					    srv.request.points.push_back(intersectionPoint);
-
-
                 	}
+                }
             }
         }
-    }
 
-    plastic_fundamentals::Point centerPoint;
-    centerPoint.x = 0.0;
-    centerPoint.y = 0.0;
-    srv.request.points.push_back(centerPoint);
-
-
-    if (!marker.call(srv)) {
-        ROS_ERROR("Failed to call service marker_service");
-    }
+        plastic_fundamentals::Point centerPoint;
+        centerPoint.x = 0.0;
+        centerPoint.y = 0.0;
+        srv.request.points.push_back(centerPoint);
 
 
-    if (!perpendicular_lines.empty()) {
-        auto compute_inward_normal = [](float a, float b, float px, float py, float robot_x, float robot_y) {
-            float norm = std::sqrt(a * a + b * b);
+        if (!marker.call(srv)) {
+            ROS_ERROR("Failed to call service marker_service");
+        }
+
+
+        if (perpendicularWalls) {
+            auto compute_inward_normal = [](float a, float b, float px, float py, float robot_x, float robot_y) {
+                float norm = std::sqrt(a * a + b * b);
+                float na = a / norm;
+                float nb = b / norm;
+
+                float robot_vec_x = robot_x - px;
+                float robot_vec_y = robot_y - py;
+
+                float dot = na * robot_vec_x + nb * robot_vec_y;
+                if (dot < 0) {
+                    na = -na;
+                    nb = -nb;
+                }
+                return std::make_pair(na, nb);
+            };
+
+            auto n1 = compute_inward_normal(perpendicular_lines[0].a_dash, perpendicular_lines[0].b_dash, intersectionPoint.x, intersectionPoint.y, 0, 0);
+            float n1_x = n1.first;
+            float n1_y = n1.second;
+            auto n2 = compute_inward_normal(perpendicular_lines[1].a_dash, perpendicular_lines[1].b_dash, intersectionPoint.x, intersectionPoint.y, 0, 0);
+            float n2_x = n2.first;
+            float n2_y = n2.second;
+            float bis_x = (n1_x + n2_x) / 2.0f;
+            float bis_y = (n1_y + n2_y) / 2.0f;
+
+            float center_x = intersectionPoint.x + 0.4 * (n1_x + n2_x);
+            float center_y = intersectionPoint.y + 0.4 * (n1_y + n2_y);
+
+            srv.request.marker_type = "LineMarker";
+            plastic_fundamentals::Line bis_line;
+            bis_line.x1 = intersectionPoint.x;
+            bis_line.y1 = intersectionPoint.y;
+            bis_line.x2 = center_x;
+            bis_line.y2 = center_y;
+            vis_srv.request.lines.push_back(bis_line);
+
+            float angle = atan2(center_y, center_x);
+            while (angle > M_PI) angle -= 2*M_PI;
+            while (angle < -M_PI) angle += 2*M_PI;
+
+            float distance = sqrt(center_x * center_x + center_y * center_y);
+
+            ROS_INFO("Computed center: (%f, %f), distance = %.3f", center_x, center_y, distance);
+
+            rotate(angle, 7.0);
+            translate(distance, 5.0);
+
+            float wall_angle = atan2(n1_y, n1_x);
+
+            float correction = wall_angle - angle;
+            while (correction > M_PI) correction -= 2*M_PI;
+            while (correction < -M_PI) correction += 2*M_PI;
+
+            rotate(correction, 7.0);
+
+            res.success = true;
+            return true;
+        } else if(parallelWalls) {
+            const Line& l1 = parallel_lines[0];
+            const Line& l2 = parallel_lines[1];
+
+            float a = l1.a_dash;
+            float b = l1.b_dash;
+            float norm = sqrt(a * a + b * b);
             float na = a / norm;
             float nb = b / norm;
 
-            float robot_vec_x = robot_x - px;
-            float robot_vec_y = robot_y - py;
+            float d1 = fabs(l1.c_dash) / norm;
+            float d2 = fabs(l2.c_dash) / norm;
 
-            float dot = na * robot_vec_x + nb * robot_vec_y;
-            if (dot < 0) {
-                na = -na;
-                nb = -nb;
-            }
-            return std::make_pair(na, nb);
-        };
+            float offset = 0.5f * (d1 - d2);
+            float center_x = offset * na;
+            float center_y = offset * nb;
 
-        auto n1 = compute_inward_normal(perpendicular_lines[0].a_dash, perpendicular_lines[0].b_dash, intersectionPoint.x, intersectionPoint.y, 0, 0);
-        float n1_x = n1.first;
-        float n1_y = n1.second;
-        auto n2 = compute_inward_normal(perpendicular_lines[1].a_dash, perpendicular_lines[1].b_dash, intersectionPoint.x, intersectionPoint.y, 0, 0);
-        float n2_x = n2.first;
-        float n2_y = n2.second;
-        float bis_x = (n1_x + n2_x) / 2.0f;
-        float bis_y = (n1_y + n2_y) / 2.0f;
+            float angle_to_center = atan2(center_y, center_x);
+            float distance = sqrt(center_x * center_x + center_y * center_y);
 
-        float center_x = intersectionPoint.x + 0.4 * (n1_x + n2_x);
-        float center_y = intersectionPoint.y + 0.4 * (n1_y + n2_y);
+            float orientation = atan2(na, -nb);
+            while (orientation > M_PI) orientation -= 2 * M_PI;
+            while (orientation < -M_PI) orientation += 2 * M_PI;
 
-        srv.request.marker_type = "LineMarker";
-        plastic_fundamentals::Line bis_line;
-        bis_line.x1 = intersectionPoint.x;
-        bis_line.y1 = intersectionPoint.y;
-        bis_line.x2 = center_x;
-        bis_line.y2 = center_y;
-        vis_srv.request.lines.push_back(bis_line);
+            float correction = orientation - angle_to_center;
+            while (correction > M_PI) correction -= 2 * M_PI;
+            while (correction < -M_PI) correction += 2 * M_PI;
 
-        float angle = atan2(center_y, center_x);
-        while (angle > M_PI) angle -= 2*M_PI;
-        while (angle < -M_PI) angle += 2*M_PI;
+            ROS_INFO("Aligning in corridor: offset %.2f, angle %.2f rad", offset, orientation);
 
-        float distance = sqrt(center_x * center_x + center_y * center_y);
+            rotate(angle_to_center, 7.0);
+            translate(distance, 5.0);
+            rotate(correction, 7.0);
 
-        ROS_INFO("Computed center: (%f, %f), distance = %.3f", center_x, center_y, distance);
+            res.success = true;
+            return true;
+        } else {
+            rotate(M_PI / 6, 7.0);
+            ros::Duration(0.5).sleep();
 
-        rotate(angle, 7.0);
-        translate(distance, 5.0);
-
-        float wall_angle = atan2(n1_y, n1_x);
-
-        float correction = wall_angle - angle;
-        while (correction > M_PI) correction -= 2*M_PI;
-        while (correction < -M_PI) correction += 2*M_PI;
-
-        rotate(correction, 7.0);
-
-        centered = true;
-    } else {
-        rotate(2 * M_PI / 6, 7.0); // Turn 180 degrees if no lines found
-        ros::Duration(0.5).sleep();
+            tries++;
+        }
     }
-
-    if (!marker.call(vis_srv)) {
-        //ROS_ERROR("Failed to call marker_service for found lines!");
-    }
-
+    res.success = false;
+    return false;
 }
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "align_node");
+    ros::init(argc, argv, "align");
     ros::NodeHandle nh;
 
     marker = nh.serviceClient<plastic_fundamentals::PublishMarker>("marker_service");
@@ -345,10 +397,9 @@ int main(int argc, char** argv) {
     ros::ServiceClient translate_client = nh.serviceClient<plastic_fundamentals::Move>("perform_translation");
     translateClient = &translate_client;
 
-    ros::Rate rate(100);
-    while (ros::ok() && !processing_done && !centered) {
-        ros::spinOnce();
-        rate.sleep();
-    }
+    ros::ServiceServer alignSrv = nh.advertiseService("align", handleAlign);
+
+    ros::spin();
+
     return 0;
 }
