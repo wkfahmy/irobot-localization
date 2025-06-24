@@ -528,7 +528,7 @@ void updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
         if (valid_rays > 0) {
             p.weight *= pow(likelihood, 1.0 / valid_rays);
         } else {
-            p.weight *= 0.3;
+            p.weight *= 0.1;
         }
     }
     
