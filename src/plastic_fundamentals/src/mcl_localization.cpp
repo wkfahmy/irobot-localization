@@ -41,8 +41,8 @@ double uncertainty = std::numeric_limits<double>::infinity();
 constexpr double XY_INIT_NOISE = 0.1;
 constexpr double THETA_INIT_NOISE = 0.4;
 
-constexpr double XY_MOTION_NOISE = 0.05;
-constexpr double THETA_MOTION_NOISE = 0.2;
+constexpr double XY_MOTION_NOISE = 0.02;
+constexpr double THETA_MOTION_NOISE = 0.1;
 
 constexpr double XY_RESAMPLE_NOISE = 0.05;
 constexpr double THETA_RESAMPLE_NOISE = 0.2;
@@ -496,12 +496,12 @@ double updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
                 ++valid_rays;
             } else {
 
-                if (expected_val < scan->range_max - 0.03) {
+                if (expected_val < scan->range_max - 0.01) {
                     log_likelihood += -1.0;
                 } else {
                     log_likelihood += 1.0;
+                    ++valid_rays;
                 }
-                ++valid_rays;
             }
         }
 
@@ -511,7 +511,7 @@ double updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
     return normalizeWeights();
 }
 
-Particle estimatePose(int top_k = 30) {
+Particle estimatePose(int top_k = 30, double eps = 0.4) {
     Particle pose;
 
     if (particles.empty()) return pose;
@@ -525,75 +525,75 @@ Particle estimatePose(int top_k = 30) {
                           return a.weight > b.weight;
                       });
 
-    double sum_x = 0.0, sum_y = 0.0;
-    double sum_sin_theta = 0.0, sum_cos_theta = 0.0;
-    double sum_weights = 0.0;
-
     int k = std::min(top_k, (int)sorted_particles.size());
+    std::vector<std::vector<int>> clusters;
+
+    std::vector<bool> visited(k, false);
 
     for (int i = 0; i < k; ++i) {
-        const Particle& p = sorted_particles[i];
-        sum_x += p.weight * p.x;
-        sum_y += p.weight * p.y;
-        sum_sin_theta += p.weight * sin(p.theta);
-        sum_cos_theta += p.weight * cos(p.theta);
-        sum_weights += p.weight;
-    }
+        if (visited[i]) continue;
+        visited[i] = true;
 
-    if (sum_weights > 0.0) {
-        pose.x = sum_x / sum_weights;
-        pose.y = sum_y / sum_weights;
-        pose.theta = atan2(sum_sin_theta / sum_weights, sum_cos_theta / sum_weights);
-        if (pose.theta < 0) pose.theta += 2 * M_PI;
+        std::vector<int> cluster = {i};
 
-        pose.row = static_cast<int>(pose.x / CELL_SIZE);
-        pose.col = static_cast<int>(pose.y / CELL_SIZE);
-    }
+        for (int j = i + 1; j < k; ++j) {
+            if (visited[j]) continue;
 
-    return pose;
-}
-
-
-Particle estimatePoseFromCluster(const std::vector<Particle>& particles, double& max_weight, double cluster_radius = 0.3) {
-    int best_cluster_size = 0;
-    double best_x = 0.0, best_y = 0.0, best_theta = 0.0;
-    max_weight = 0.0;
-
-    for (const auto& center : particles) {
-        double cluster_x = 0.0, cluster_y = 0.0;
-        double sin_sum = 0.0, cos_sum = 0.0;
-        double total_weight = 0.0;
-        int count = 0;
-
-        for (const auto& p : particles) {
-            double dx = p.x - center.x;
-            double dy = p.y - center.y;
-            if (dx * dx + dy * dy < cluster_radius * cluster_radius) {
-                cluster_x += p.x * p.weight;
-                cluster_y += p.y * p.weight;
-                sin_sum += std::sin(p.theta) * p.weight;
-                cos_sum += std::cos(p.theta) * p.weight;
-                total_weight += p.weight;
-                ++count;
-                if (p.weight > max_weight) max_weight = p.weight;
+            const Particle& pi = sorted_particles[i];
+            const Particle& pj = sorted_particles[j];
+            double dx = pi.x - pj.x;
+            double dy = pi.y - pj.y;
+            if (std::sqrt(dx * dx + dy * dy) <= eps) {
+                cluster.push_back(j);
+                visited[j] = true;
             }
         }
 
-        if (count > best_cluster_size) {
-            best_cluster_size = count;
-            best_x = cluster_x / total_weight;
-            best_y = cluster_y / total_weight;
-            best_theta = std::atan2(sin_sum, cos_sum);
+        if (cluster.size() > 0)
+            clusters.push_back(cluster);
+    }
+
+    double max_weight = 0.0;
+    int best_cluster_index = -1;
+
+    for (size_t c = 0; c < clusters.size(); ++c) {
+        double cluster_weight = 0.0;
+        for (int idx : clusters[c]) {
+            cluster_weight += sorted_particles[idx].weight;
+        }
+        if (cluster_weight > max_weight) {
+            max_weight = cluster_weight;
+            best_cluster_index = c;
         }
     }
 
-    Particle result;
-    result.x = best_x;
-    result.y = best_y;
-    result.theta = best_theta;
-    result.row = std::round(best_y);
-    result.col = std::round(best_x);
-    return result;
+    if (best_cluster_index >= 0) {
+        const auto& best_cluster = clusters[best_cluster_index];
+        double sum_x = 0.0, sum_y = 0.0;
+        double sum_sin_theta = 0.0, sum_cos_theta = 0.0;
+        double sum_weights = 0.0;
+
+        for (int idx : best_cluster) {
+            const Particle& p = sorted_particles[idx];
+            sum_x += p.weight * p.x;
+            sum_y += p.weight * p.y;
+            sum_sin_theta += p.weight * sin(p.theta);
+            sum_cos_theta += p.weight * cos(p.theta);
+            sum_weights += p.weight;
+        }
+
+        if (sum_weights > 0.0) {
+            pose.x = sum_x / sum_weights;
+            pose.y = sum_y / sum_weights;
+            pose.theta = atan2(sum_sin_theta / sum_weights, sum_cos_theta / sum_weights);
+            if (pose.theta < 0) pose.theta += 2 * M_PI;
+
+            pose.row = static_cast<int>(pose.x / CELL_SIZE);
+            pose.col = static_cast<int>(pose.y / CELL_SIZE);
+        }
+    }
+
+    return pose;
 }
 
 double lastAbsLeft = 0;
@@ -726,8 +726,6 @@ void translate_to(double target_x, double target_y, double speed) {
                  target_x, target_y, current_pose.x, current_pose.y, distance);
         if (distance < tolerance) break;
 
-        double theta_to_target = std::atan2(dy, dx);
-        rotate_to(theta_to_target, speed);
         translate(distance, speed);
         ros::spinOnce();
         rate.sleep();
@@ -758,6 +756,11 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundam
         double target_x = target_grid_x * CELL_SIZE + 0.4;
         double target_y = target_grid_y * CELL_SIZE + 0.4;
 
+        double dx = target_x - current_pose.x;
+        double dy = target_y - current_pose.y;
+        double target_theta = atan2(dy, dx);
+
+        rotate_to(target_theta, 7.0);
         translate_to(target_x, target_y, 10.0);
 
         grid_x = target_grid_x;

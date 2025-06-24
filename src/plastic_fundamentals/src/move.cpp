@@ -13,7 +13,8 @@ double leftTicks = 0;
 double rightTicks = 0;
 
 std::vector<float> lidar_ranges;
-float angle_min, angle_increment;
+double angle_min, angle_increment;
+double min_range, max_range;
 bool lidar_data_received = false;
 
 bool isFlying = false;
@@ -25,13 +26,13 @@ const double SAFETY_MARGIN = 0.03;
 
 const double danger_distance = ROBOT_RADIUS + LIDAR_OFFSET + SAFETY_MARGIN;
 
+constexpr double LIDAR_OFFSET_M = 0.16;
 
 constexpr float DESIRED_DISTANCE = 0.4f;
-constexpr float MAX_LIDAR_RANGE = 1.0f;
 constexpr float KP_LATERAL = 0.8f;
 constexpr float MAX_CORRECTION = 0.8f;
-constexpr float FRONT_SLOW_THRESHOLD = 0.4f;
-constexpr float FRONT_STOP_THRESHOLD = 0.3f;
+constexpr float FRONT_SLOW_THRESHOLD = 0.45f;
+constexpr float FRONT_STOP_THRESHOLD = 0.38f;
 constexpr float MAX_SIDE_RANGE = 0.8f;
 
 ros::ServiceClient diffDriveClient;
@@ -57,25 +58,10 @@ void sensorCallback(const create_fundamentals::SensorPacket::ConstPtr& msg) {
 void lidarCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     lidar_ranges = msg->ranges;
     angle_min = msg->angle_min;
+    min_range = msg->range_min;
+    max_range = msg->range_max;
     angle_increment = msg->angle_increment;
     lidar_data_received = true;
-
-    /*for (size_t i = 0; i < msg->ranges.size(); ++i) {
-        double angle = msg->angle_min + i * msg->angle_increment;
-
-        // Garder seulement les angles proches de 0° (devant)
-        if (std::abs(angle) <= M_PI / 24) {
-            double distance = msg->ranges[i];
-
-            if (distance >= msg->range_min && distance <= msg->range_max) {
-                if (distance < danger_distance) {
-                    will_hit_obstacle = true;
-                    return;
-                }
-            }
-        }
-    }
-    will_hit_obstacle = false;*/
 }
 
 void resetEncoders() {
@@ -140,16 +126,23 @@ float calculateLateralError() {
 
 
 float calculateFrontDistance() {
-    if (!lidar_data_received || lidar_ranges.empty()) return MAX_LIDAR_RANGE;
+    if (!lidar_data_received || lidar_ranges.empty()) return std::numeric_limits<double>::infinity();
 
-    float front_min = MAX_LIDAR_RANGE;
+    double front_min = std::numeric_limits<double>::infinity();
     double angle = angle_min;
     for (size_t i = 0; i < lidar_ranges.size(); ++i, angle += angle_increment) {
         float r = lidar_ranges[i];
-        if (r < 0.1f || r > MAX_LIDAR_RANGE || std::isnan(r)) continue;
+        double sin_t = sin(angle);
+        double cos_t = cos(angle);
+
+        double x = r * cos_t + LIDAR_OFFSET_M;
+        double y = r * sin_t;
+
+        double distance = sqrt(x * x + y * y);
+        if (distance < min_range || distance > max_range || std::isnan(r)) continue;
 
         if (angle > -0.26 && angle < 0.26) {
-            front_min = std::min(front_min, r);
+            front_min = std::min(front_min, distance);
         }
     }
 

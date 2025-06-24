@@ -13,10 +13,6 @@
 #include <cstdlib>
 #include <optional>
 
-ros::ServiceClient* resetEncodersClient;
-create_fundamentals::DiffDrive diffDriveSrv;
-ros::ServiceClient* diffDriveClient;
-
 ros::ServiceClient marker;
 
 double WHEEL_RADIUS_M = 0.0325;
@@ -29,11 +25,7 @@ int    RANSAC_MAX_ITER       = 1000;
 double leftTicks = 0;
 double rightTicks = 0;
 
-bool processing_done = false; // Flag to indicate if processing is done
-
 bool centered = false;
-
-bool moving = false;
 
 ros::ServiceClient* rotateClient;
 ros::ServiceClient* translateClient;
@@ -330,14 +322,14 @@ bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals
             float wall_angle = atan2(n1_y, n1_x);
 
             float correction = wall_angle - angle;
-            while (correction > M_PI) correction -= 2*M_PI;
-            while (correction < -M_PI) correction += 2*M_PI;
+            while (correction > M_PI / 2) correction -= M_PI;
+            while (correction < -M_PI / 2) correction += M_PI;
 
             rotate(correction, 7.0);
 
             res.success = true;
             return true;
-        } else if(parallelWalls) {
+        } else if(parallelWalls && tries > 3) {
             const Line& l1 = parallel_lines[0];
             const Line& l2 = parallel_lines[1];
 
@@ -362,8 +354,8 @@ bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals
             while (orientation < -M_PI) orientation += 2 * M_PI;
 
             float correction = orientation - angle_to_center;
-            while (correction > M_PI) correction -= 2 * M_PI;
-            while (correction < -M_PI) correction += 2 * M_PI;
+            while (correction > M_PI / 2) correction -= M_PI;
+            while (correction < -M_PI / 2) correction += M_PI;
 
             ROS_INFO("Aligning in corridor: offset %.2f, angle %.2f rad", offset, orientation);
 
@@ -374,10 +366,14 @@ bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals
             res.success = true;
             return true;
         } else {
-            rotate(M_PI / 6, 7.0);
+            double angle = M_PI / 2;
+            if (tries >= 4) angle = M_PI / 3;
+            rotate(angle, 7.0);
             ros::Duration(0.5).sleep();
 
             tries++;
+
+            ros::spinOnce();
         }
     }
     res.success = false;

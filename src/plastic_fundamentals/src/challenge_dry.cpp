@@ -480,7 +480,7 @@ public:
         
         if (isAtLocation(target.first, target.second)) {
             publishStatus("Arrived at gold location, starting collection");
-            alignRobot();
+            //alignRobot();
             setState(COLLECTING_GOLD);
             collection_start_time = ros::Time::now();
             timing_active = true;
@@ -554,7 +554,7 @@ public:
         
         if (isAtLocation(target.first, target.second)) {
             publishStatus("Arrived at pickup location, going to the Helicopter");
-            alignRobot();
+            //alignRobot();
             setState(EXITING);
             exit_start_time = ros::Time::now();
             timing_active = true;
