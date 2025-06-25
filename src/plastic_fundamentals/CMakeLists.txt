@@ -83,6 +83,10 @@ add_executable(align src/align.cpp)
 target_link_libraries(align ${catkin_LIBRARIES})
 add_dependencies(align create_fundamentals_generate_messages_cpp)
 
+add_executable(align2 src/align2.cpp)
+target_link_libraries(align2 ${catkin_LIBRARIES})
+add_dependencies(align2 create_fundamentals_generate_messages_cpp)
+
 add_executable(mcl_localization src/mcl_localization.cpp)
 target_link_libraries(mcl_localization ${catkin_LIBRARIES})
 add_dependencies(mcl_localization create_fundamentals_generate_messages_cpp)
