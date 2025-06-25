@@ -33,7 +33,7 @@ int num_rows = 0;
 int num_cols = 0;
 
 int min_particles = 500;
-int max_particles = 3000;
+int max_particles = 2000;
 int current_num_particles = 1000;
 
 double uncertainty = std::numeric_limits<double>::infinity();
@@ -304,7 +304,6 @@ void resampleParticles(double n_eff) {
         new_particles.push_back(p);
     }
 
-    particles.resize(current_num_particles);
     particles = std::move(new_particles);
 
     plastic_fundamentals::PublishMarker srv;
@@ -318,9 +317,7 @@ void resampleParticles(double n_eff) {
         srv.request.points.push_back(pt);
     }
 
-    if (!marker.call(srv)) {
-        //ROS_ERROR("Failed to call service marker_service");
-    }
+    marker.call(srv);
 }
 
 void getMapLines(const plastic_fundamentals::Grid::ConstPtr& msg) {
@@ -458,24 +455,24 @@ std::vector<double> calculateExpectedScan(const Particle& p, const std::vector<d
     return expected_distances;
 }
 
-double updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
+double updateParticlesSensor(const sensor_msgs::LaserScan scan) {
     constexpr int step = 10;
     constexpr double sigma = 0.1;
     constexpr double sigma2_inv = 1.0 / (sigma * sigma);
-    const int num_beams = (scan->ranges.size() - 4 * step) / step;
+    const int num_beams = (scan.ranges.size() - 4 * step) / step;
 
     std::vector<double> angles(num_beams);
     for (int j = 0; j < num_beams; ++j) {
         int i = 20 + j * step;
-        angles[j] = scan->angle_min + i * scan->angle_increment;
+        angles[j] = scan.angle_min + i * scan.angle_increment;
     }
 
     std::vector<float> valid_ranges(num_beams);
     std::vector<bool> is_valid(num_beams, false);
     for (int j = 0; j < num_beams; ++j) {
         int i = 20 + j * step;
-        float measured = scan->ranges[i];
-        if (!std::isnan(measured) && measured >= scan->range_min && measured <= scan->range_max) {
+        float measured = scan.ranges[i];
+        if (!std::isnan(measured) && measured >= scan.range_min && measured <= scan.range_max) {
             valid_ranges[j] = measured;
             is_valid[j] = true;
         }
@@ -496,7 +493,7 @@ double updateParticlesSensor(const sensor_msgs::LaserScan::ConstPtr& scan) {
                 ++valid_rays;
             } else {
 
-                if (expected_val < scan->range_max - 0.01) {
+                if (expected_val < scan.range_max - 0.01) {
                     log_likelihood += -1.0;
                 } else {
                     log_likelihood += 1.0;
@@ -637,19 +634,19 @@ bool translate(double distance, double speed, bool correction = false) {
     return success;
 }
 
-bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_threshold) {
+bool isClearPath(const sensor_msgs::LaserScan msg, double obstacle_threshold) {
     double angle_range = M_PI / 24.0;
 
-    int start_index = std::max(0, static_cast<int>((-angle_range - msg->angle_min) / msg->angle_increment));
-    int end_index = std::min(static_cast<int>((angle_range - msg->angle_min) / msg->angle_increment), static_cast<int>(msg->ranges.size()) - 1);
+    int start_index = std::max(0, static_cast<int>((-angle_range - msg.angle_min) / msg.angle_increment));
+    int end_index = std::min(static_cast<int>((angle_range - msg.angle_min) / msg.angle_increment), static_cast<int>(msg.ranges.size()) - 1);
 
     int blocked_rays = 0;
     int valid_rays = 0;
 
     for (int i = start_index; i <= end_index; ++i) {
-        float r = msg->ranges[i];
+        float r = msg.ranges[i];
         valid_rays++;
-        if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
+        if (!std::isnan(r) && r >= msg.range_min && r <= msg.range_max) {
             if (r < obstacle_threshold) {
                 blocked_rays++;
             }
@@ -659,33 +656,27 @@ bool isClearPath(const sensor_msgs::LaserScan::ConstPtr& msg, double obstacle_th
     return static_cast<double>(blocked_rays) / valid_rays < 0.4;
 }
 
-int getMostOpenDirection(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    int size = msg->ranges.size();
-    int third = size / 3;
+int getMostOpenDirection(const sensor_msgs::LaserScan msg) {
+    int size = msg.ranges.size();
+    float max_range = 0.0;
+    int max_index = -1;
 
-    double left_sum = 0, right_sum = 0;
-    int left_count = 0, right_count = 0;
-
-    for (int i = 2 * third; i < size; i += 5) {
-        float r = msg->ranges[i];
-        if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
-            left_sum += r;
-            left_count++;
+    for (int i = 0; i < size; ++i) {
+        float r = msg.ranges[i];
+        if (!std::isnan(r) && r >= msg.range_min && r <= msg.range_max) {
+            if (r > max_range) {
+                max_range = r;
+                max_index = i;
+            }
         }
     }
 
-    for (int i = 0; i < third; i += 5) {
-        float r = msg->ranges[i];
-        if (!std::isnan(r) && r >= msg->range_min && r <= msg->range_max) {
-            right_sum += r;
-            right_count++;
-        }
+    if (max_index == -1) {
+        return -1; // Default turn
     }
 
-    double left_avg = (left_count > 0) ? left_sum / left_count : 0;
-    double right_avg = (right_count > 0) ? right_sum / right_count : 0;
-
-    if (left_avg > right_avg) {
+    int mid = size / 2;
+    if (max_index < mid) {
         return 1;
     } else {
         return -1;
@@ -843,16 +834,19 @@ void calculateUncertainty(double& spatial_uncertainty, double& dominant_ratio) {
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     if (!map_data || particles.empty()) return;
 
-    pathClear = isClearPath(msg, 0.8);
-    openDirection = getMostOpenDirection(msg);
 
-    double n_eff = updateParticlesSensor(msg);
+    sensor_msgs::LaserScan local_copy = *msg;
+
+    pathClear = isClearPath(local_copy, 0.8);
+    openDirection = getMostOpenDirection(local_copy);
+
+    double n_eff = updateParticlesSensor(local_copy);
     double effective_particles_threshold = 0.4 * current_num_particles;
 
     double spatial_uncertainty = 0.0;
     double dominant_ratio = 0.0;
     calculateUncertainty(spatial_uncertainty, dominant_ratio);
-    adaptParticleCount(spatial_uncertainty);
+    //adaptParticleCount(spatial_uncertainty);
 
     resampleParticles(n_eff);
 

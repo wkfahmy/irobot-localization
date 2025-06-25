@@ -35,7 +35,7 @@ int min_index;
 int start_index;
 int end_index;
 
-sensor_msgs::LaserScan::ConstPtr last_scan_msg;
+sensor_msgs::LaserScan last_scan_msg;
 
 bool rotate(double angle_rad, double speed) {
     plastic_fundamentals::Move srv;
@@ -129,30 +129,32 @@ const double dL    = 0.16;
 std::vector<plastic_fundamentals::Point> obstaclePoints;
 
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
-    last_scan_msg = msg;
+    last_scan_msg = *msg;
 }
 
 bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals::Align::Response &res) {
     ros::spinOnce();
+
     int tries = 0;
+
     while (tries < 10) {
 
-        if (obstaclePoints.size() != last_scan_msg->ranges.size()) {
-            obstaclePoints.resize(last_scan_msg->ranges.size());
+        if (obstaclePoints.size() != last_scan_msg.ranges.size()) {
+            obstaclePoints.resize(last_scan_msg.ranges.size());
         }
 
         min_distance = std::numeric_limits<float>::infinity();
         min_index = -1;
 
-        for (int i = 0; i < last_scan_msg->ranges.size(); ++i) {
-		    if (i < 16 ||  i > last_scan_msg->ranges.size() - 16) {
+        for (int i = 0; i < last_scan_msg.ranges.size(); ++i) {
+		    if (i < 16 ||  i > last_scan_msg.ranges.size() - 16) {
 			    obstaclePoints[i].x = std::numeric_limits<double>::infinity();
                 obstaclePoints[i].y = std::numeric_limits<double>::infinity();
 			    continue;
 		    }
-            float r = last_scan_msg->ranges[i];
-            if (!isnan(r) && r >= last_scan_msg->range_min && r <= last_scan_msg->range_max) {
-                double theta = last_scan_msg->angle_min + i * last_scan_msg->angle_increment;
+            float r = last_scan_msg.ranges[i];
+            if (!isnan(r) && r >= last_scan_msg.range_min && r <= last_scan_msg.range_max) {
+                double theta = last_scan_msg.angle_min + i * last_scan_msg.angle_increment;
                 double sin_t = sin(theta);
                 double cos_t = cos(theta);
 
@@ -377,7 +379,7 @@ bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals
         }
     }
     res.success = false;
-    return false;
+    return true;
 }
 
 int main(int argc, char** argv) {
