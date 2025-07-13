@@ -361,16 +361,16 @@ bool handleAlign(plastic_fundamentals::Align::Request &req, plastic_fundamentals
 
             ROS_INFO("Aligning in corridor: offset %.2f, angle %.2f rad", offset, orientation);
 
-            rotate(angle_to_center, 7.0);
-            translate(distance, 5.0);
-            rotate(correction, 7.0);
+            rotate(angle_to_center, 12.0);
+            translate(distance, 10.0);
+            rotate(correction, 12.0);
 
             res.success = true;
             return true;
         } else {
             double angle = M_PI / 2;
             if (tries >= 4) angle = M_PI / 3;
-            rotate(angle, 7.0);
+            rotate(angle, 12.0);
             ros::Duration(0.5).sleep();
 
             tries++;

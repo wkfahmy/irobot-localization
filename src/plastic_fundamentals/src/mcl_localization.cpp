@@ -459,16 +459,13 @@ double updateParticlesSensor(const sensor_msgs::LaserScan scan) {
 	const int step = (scan.ranges.size() - 2 * start_index) / num_beams;
 	ROS_INFO("Number of beams: %d, Step: %d", num_beams, step);
 
+
+    std::vector<float> valid_ranges(num_beams);
+    std::vector<bool> is_valid(num_beams, false);
     std::vector<double> angles(num_beams);
     for (int j = 0; j < num_beams; ++j) {
         int i = start_index + j * step;
         angles[j] = scan.angle_min + i * scan.angle_increment;
-    }
-
-    std::vector<float> valid_ranges(num_beams);
-    std::vector<bool> is_valid(num_beams, false);
-    for (int j = 0; j < num_beams; ++j) {
-        int i = 20 + j * step;
         float measured = scan.ranges[i];
         valid_ranges[j] = measured;
         if (!std::isnan(measured) && measured >= scan.range_min && measured <= scan.range_max) {
@@ -749,8 +746,8 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundam
         double dy = target_y - current_pose.y;
         double target_theta = atan2(dy, dx);
 
-        rotate_to(target_theta, 7.0);
-        translate_to(target_x, target_y, 10.0);
+        rotate_to(target_theta, 12.0);
+        translate_to(target_x, target_y, 20.0);
 
         grid_x = target_grid_x;
         grid_y = target_grid_y;
@@ -911,11 +908,11 @@ void localizationRoutine(ros::Rate rate) {
         switch (localization_phase) {
             case SPIN:
                 ROS_INFO("Rotation robot to cover more area...");
-                rotate(openDirection * M_PI / 2, 7.0, true);
+                rotate(openDirection * M_PI / 2, 12.0, true);
                 break;
             case MOVE:
                 ROS_INFO("Moving robot to cover more area...");
-                translate(move_distance, 10.0, true);
+                translate(move_distance, 15.0, true);
                 break;
         }
 
