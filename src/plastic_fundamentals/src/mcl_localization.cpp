@@ -130,6 +130,8 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
     num_cols = map->rows[0].cells.size();
     int total_cells = num_rows * num_cols;
 
+	current_num_particles = 4 * total_cells * 8;
+
     int particles_per_cell = current_num_particles / (total_cells * 4);
     if (particles_per_cell < 1) particles_per_cell = 1;
 
@@ -267,9 +269,11 @@ void resampleParticles(double n_eff) {
     std::uniform_real_distribution<double> rand_y(0, num_rows * 0.8);
     std::uniform_real_distribution<double> rand_theta(-M_PI, M_PI);
 
-    const double RANDOM_PARTICLE_RATIO = 0.3;
+    const double RANDOM_PARTICLE_RATIO = 0.4;
+	const double BIASED_CLUSTER_RATIO = is_localized ? 0.4 : 0.0;
     int num_random = static_cast<int>(RANDOM_PARTICLE_RATIO * current_num_particles);
-    int num_resampled = current_num_particles - num_random;
+    int num_biased = static_cast<int>(BIASED_CLUSTER_RATIO * current_num_particles);
+    int num_resampled = current_num_particles - num_biased - num_random;
 
     std::vector<Particle> new_particles;
     new_particles.reserve(current_num_particles);
@@ -289,6 +293,21 @@ void resampleParticles(double n_eff) {
         p.x += noise_xy(random_generator);
         p.y += noise_xy(random_generator);
         p.theta += noise_theta(random_generator);
+        while (p.theta > M_PI) p.theta -= 2 * M_PI;
+        while (p.theta <= -M_PI) p.theta += 2 * M_PI;
+        p.weight = 1.0 / current_num_particles;
+        new_particles.push_back(p);
+    }
+
+    std::normal_distribution<double> mode_noise_x(0.0, 0.03);
+    std::normal_distribution<double> mode_noise_y(0.0, 0.03);
+    std::normal_distribution<double> mode_noise_theta(0.0, 0.15);
+
+    for (int k = 0; k < num_biased; ++k) {
+        Particle p;
+        p.x = current_pose.x + mode_noise_x(random_generator);
+        p.y = current_pose.y + mode_noise_y(random_generator);
+        p.theta = current_pose.theta + mode_noise_theta(random_generator);
         while (p.theta > M_PI) p.theta -= 2 * M_PI;
         while (p.theta <= -M_PI) p.theta += 2 * M_PI;
         p.weight = 1.0 / current_num_particles;
@@ -391,31 +410,6 @@ bool checkIntersection(const plastic_fundamentals::Line& ray, const plastic_fund
     return false;
 }
 
-double getRayDistance(const plastic_fundamentals::Grid& grid, double px, double py, double ray_angle_rad) {
-    double dx = cos(ray_angle_rad);
-    double dy = sin(ray_angle_rad);
-
-    double min_dist = std::numeric_limits<double>::infinity();
-    double intersect_x, intersect_y;
-
-    for (const auto& line : map_lines) {
-        plastic_fundamentals::Line ray;
-        ray.x1 = px;
-        ray.y1 = py;
-        ray.x2 = px + dx;
-        ray.y2 = py + dy;
-
-        if (checkIntersection(ray, line, intersect_x, intersect_y)) {
-            double dist = std::sqrt(std::pow(intersect_x - px, 2) + std::pow(intersect_y - py, 2));
-            if (dist < min_dist) {
-                min_dist = dist;
-            }
-        }
-    }
-
-    return (min_dist != std::numeric_limits<double>::infinity()) ? min_dist : std::numeric_limits<double>::infinity();
-}
-
 double getDistanceToWall(double angle, double lidar_origin_x, double lidar_origin_y) {
     plastic_fundamentals::Line ray;
     ray.x1 = lidar_origin_x;
@@ -424,14 +418,14 @@ double getDistanceToWall(double angle, double lidar_origin_x, double lidar_origi
     ray.x2 = lidar_origin_x + cos(angle);
     ray.y2 = lidar_origin_y + sin(angle);
 
-    double closest_distance = 1.0;
+    double closest_distance = std::numeric_limits<double>::infinity();
     double closest_intersect_x, closest_intersect_y;
 
     for (const auto& wall : map_lines) {
         double intersect_x, intersect_y;
         if (checkIntersection(ray, wall, intersect_x, intersect_y)) {
             double distance = std::sqrt(std::pow(intersect_x - lidar_origin_x, 2) + std::pow(intersect_y - lidar_origin_y, 2));
-            if (distance < closest_distance) {
+            if (distance < closest_distance && distance < 1.0) {
                 closest_distance = distance;
             }
         }
@@ -456,14 +450,18 @@ std::vector<double> calculateExpectedScan(const Particle& p, const std::vector<d
 }
 
 double updateParticlesSensor(const sensor_msgs::LaserScan scan) {
-    constexpr int step = 10;
-    constexpr double sigma = 0.1;
+	constexpr int start_index = 20;
+    constexpr float scan_coverage = 0.1;
+    constexpr double sigma = 0.5;
     constexpr double sigma2_inv = 1.0 / (sigma * sigma);
-    const int num_beams = (scan.ranges.size() - 4 * step) / step;
+    const int num_beams = (scan.ranges.size() - 2 * start_index) * scan_coverage;
+
+	const int step = (scan.ranges.size() - 2 * start_index) / num_beams;
+	ROS_INFO("Number of beams: %d, Step: %d", num_beams, step);
 
     std::vector<double> angles(num_beams);
     for (int j = 0; j < num_beams; ++j) {
-        int i = 20 + j * step;
+        int i = start_index + j * step;
         angles[j] = scan.angle_min + i * scan.angle_increment;
     }
 
@@ -472,34 +470,34 @@ double updateParticlesSensor(const sensor_msgs::LaserScan scan) {
     for (int j = 0; j < num_beams; ++j) {
         int i = 20 + j * step;
         float measured = scan.ranges[i];
+        valid_ranges[j] = measured;
         if (!std::isnan(measured) && measured >= scan.range_min && measured <= scan.range_max) {
-            valid_ranges[j] = measured;
             is_valid[j] = true;
         }
     }
 
+	std::vector<bool> remove(scan.ranges.size(), false);
+
+
     for (auto& p : particles) {
         std::vector<double> expected = calculateExpectedScan(p, angles);
 
-        double log_likelihood = 0.0;
+        double log_likelihood = 1.0;
         int valid_rays = 0;
 
         for (int j = 0; j < num_beams; ++j) {
             double expected_val = expected[j];
 
-            if (is_valid[j]) {
-                double diff = valid_ranges[j] - expected_val;
+	 		if (is_valid[j] && expected_val >= scan.range_min && expected_val <= scan.range_max) {
+        	    double diff = valid_ranges[j] - expected_val;
                 log_likelihood += -0.5 * diff * diff * sigma2_inv;
+	            ++valid_rays;
+			} else if (expected_val > scan.range_max && std::isnan(valid_ranges[j])) {
+	            log_likelihood += 1.0;
                 ++valid_rays;
-            } else {
-
-                if (expected_val < scan.range_max - 0.01) {
-                    log_likelihood += -1.0;
-                } else {
-                    log_likelihood += 1.0;
-                    ++valid_rays;
-                }
-            }
+    	    } else {
+                log_likelihood += -1.0;
+			}
         }
 
         p.weight *= (valid_rays > 0) ? std::exp(log_likelihood / valid_rays) : 0.5;
@@ -677,9 +675,9 @@ int getMostOpenDirection(const sensor_msgs::LaserScan msg) {
 
     int mid = size / 2;
     if (max_index < mid) {
-        return 1;
-    } else {
         return -1;
+    } else {
+        return 1;
     }
 }
 
@@ -846,13 +844,12 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     double spatial_uncertainty = 0.0;
     double dominant_ratio = 0.0;
     calculateUncertainty(spatial_uncertainty, dominant_ratio);
-    //adaptParticleCount(spatial_uncertainty);
 
     resampleParticles(n_eff);
 
     current_pose = estimatePose();
 
-    if ((spatial_uncertainty < 0.65 && dominant_ratio > 0.45) || (spatial_uncertainty < 0.8 && dominant_ratio > 0.8)) {
+    if ((spatial_uncertainty < 0.55 && dominant_ratio > 0.45) || (spatial_uncertainty < 0.8 && dominant_ratio > 0.8)) {
         is_localized = true;
         lost_counter = 0;
 
@@ -980,14 +977,10 @@ void initSong() {
 
 std::mutex align_mutex;
 
-void alignRobot() {
+bool alignRobot() {
     std::lock_guard<std::mutex> lock(align_mutex);
     plastic_fundamentals::Align srv;
-    if (alignClient.call(srv)) {
-        ROS_INFO("Robot successfully aligned");
-    } else {
-        ROS_ERROR("Failed to align robot");
-    }
+    return alignClient.call(srv);
 }
 
 
@@ -1023,12 +1016,10 @@ int main(int argc, char** argv) {
 
     ROS_INFO("MCL localization node started");
 
-    ros::Duration(2).sleep();
-    if (!alignClient.waitForExistence(ros::Duration(5.0))) {
-        ROS_ERROR("align service not available");
-    } else {
-        alignRobot();
-    }
+	ros::service::waitForService("/align", ros::Duration(10.0));
+	while(!alignRobot()) {
+        ros::Duration(0.5).sleep();
+	}
 
     ros::AsyncSpinner spinner(2);
     spinner.start();

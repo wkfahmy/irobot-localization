@@ -194,9 +194,9 @@ bool handleRotate(plastic_fundamentals::Move::Request &req,
     diffDriveSrv.request.left = 0;
     diffDriveSrv.request.right = 0;
     diffDriveClient.call(diffDriveSrv);
-    resetEncoders();
 
-    res.success = !will_hit_obstacle;
+    res.success = true;
+    resetEncoders();
     return true;
 }
 
@@ -259,7 +259,7 @@ bool handleTranslate(plastic_fundamentals::Move::Request &req,
     diffDriveClient.call(diffDriveSrv);
     resetEncoders();
 
-    res.success = true;
+    res.success = !will_hit_obstacle;
     return true;
 }
 
