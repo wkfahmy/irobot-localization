@@ -2,5 +2,4 @@
     <node pkg="plastic_fundamentals" type="move" name="move" output="screen" />
     <node pkg="plastic_fundamentals" type="align" name="align" output="screen" />
     <node pkg="plastic_fundamentals" type="mcl_localization" name="localization" output="screen" />
-    <node pkg="plastic_fundamentals" type="move_to_position" name="move_to_position" output="screen" />
 </launch>

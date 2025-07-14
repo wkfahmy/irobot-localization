@@ -2,7 +2,7 @@
 #include <sensor_msgs/LaserScan.h>
 #include <create_fundamentals/DiffDrive.h>
 #include <create_fundamentals/ResetEncoders.h>
-#include "create_fundamentals/SensorPacket.h"
+#include <create_fundamentals/SensorPacket.h>
 #include <plastic_fundamentals/PublishMarker.h>
 #include <create_fundamentals/PlaySong.h>
 #include <create_fundamentals/StoreSong.h>
@@ -23,6 +23,7 @@
 #include <fstream>
 #include <plastic_fundamentals/AbsEncoder.h>
 #include <queue>
+#include <eigen3/Eigen/Dense>
 
 constexpr double WHEEL_RADIUS_M = 0.0325;
 constexpr double TRACK_WIDTH_M = 0.263;
@@ -80,8 +81,9 @@ ros::ServiceClient rotateClient;
 ros::ServiceClient translateClient;
 ros::ServiceClient alignClient;
 
+ros::ServiceClient diffDriveClient;
+
 create_fundamentals::DiffDrive diffDriveSrv;
-ros::ServiceClient* diffDriveClient;
 plastic_fundamentals::Grid::ConstPtr map_data;
 Particle current_pose;
 
@@ -130,7 +132,7 @@ void initializeParticles(const plastic_fundamentals::Grid::ConstPtr& map) {
     num_cols = map->rows[0].cells.size();
     int total_cells = num_rows * num_cols;
 
-	current_num_particles = 4 * total_cells * 8;
+	current_num_particles = 4 * total_cells * 10;
 
     int particles_per_cell = current_num_particles / (total_cells * 4);
     if (particles_per_cell < 1) particles_per_cell = 1;
@@ -477,6 +479,12 @@ double updateParticlesSensor(const sensor_msgs::LaserScan scan) {
 
 
     for (auto& p : particles) {
+        if (p.x < 0 || p.x >= num_cols * CELL_SIZE ||
+            p.y < 0 || p.y >= num_rows * CELL_SIZE) {
+            p.weight = 0.0;
+            continue;
+        }
+
         std::vector<double> expected = calculateExpectedScan(p, angles);
 
         double log_likelihood = 1.0;
@@ -493,7 +501,7 @@ double updateParticlesSensor(const sensor_msgs::LaserScan scan) {
 	            log_likelihood += 1.0;
                 ++valid_rays;
     	    } else {
-                log_likelihood += -1.0;
+                log_likelihood += -0.5;
 			}
         }
 
@@ -592,6 +600,11 @@ double lastAbsLeft = 0;
 double lastAbsRight = 0;
 
 void absEncoderCallback(const plastic_fundamentals::AbsEncoder::ConstPtr& msg) {
+    if (msg->reset) {
+        lastAbsLeft = 0;
+        lastAbsRight = 0;
+        return;
+    }
     double delta_left = msg->abs_left - lastAbsLeft;
     double delta_right = msg->abs_right - lastAbsRight;
 
@@ -718,7 +731,7 @@ void translate_to(double target_x, double target_y, double speed) {
     }
 }
 
-bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundamentals::ExecutePlan::Response &res) {
+/*bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundamentals::ExecutePlan::Response &res) {
     int grid_x = current_pose.row;
     int grid_y = current_pose.col;
     double theta = current_pose.theta;
@@ -755,7 +768,7 @@ bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundam
 
     res.success = true;
     return true;
-}
+}*/
 
 void mapCallback(const plastic_fundamentals::Grid::ConstPtr& msg) {
     if (map_data) {
@@ -826,11 +839,13 @@ void calculateUncertainty(double& spatial_uncertainty, double& dominant_ratio) {
     dominant_ratio = max_cell_weight / total_weight;
 }
 
+sensor_msgs::LaserScan local_copy;
+
 void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
     if (!map_data || particles.empty()) return;
 
 
-    sensor_msgs::LaserScan local_copy = *msg;
+    local_copy = *msg;
 
     pathClear = isClearPath(local_copy, 0.8);
     openDirection = getMostOpenDirection(local_copy);
@@ -853,7 +868,10 @@ void scanCallback(const sensor_msgs::LaserScan::ConstPtr& msg) {
         plastic_fundamentals::Pose current_pose_msg;
         current_pose_msg.row = current_pose.row;
         current_pose_msg.column = current_pose.col;
+        current_pose_msg.x = current_pose.x;
+        current_pose_msg.y = current_pose.y;
         current_pose_msg.orientation = angleToDirection(current_pose.theta);
+        current_pose_msg.theta = current_pose.theta;
 
         pose_pub.publish(current_pose_msg);
 
@@ -898,22 +916,26 @@ void localizationRoutine(ros::Rate rate) {
     LocalizationPhase localization_phase = SPIN;
     double move_distance = 0.8;
 
-    while (ros::ok() && !is_localized) {
-        if (pathClear) {
-            localization_phase = MOVE;
-        } else {
-            localization_phase = SPIN;
-        }
+    ros::spinOnce();
 
-        switch (localization_phase) {
-            case SPIN:
-                ROS_INFO("Rotation robot to cover more area...");
-                rotate(openDirection * M_PI / 2, 12.0, true);
-                break;
-            case MOVE:
-                ROS_INFO("Moving robot to cover more area...");
-                translate(move_distance, 15.0, true);
-                break;
+    while (ros::ok() && !is_localized) {
+        if (first_localization) {
+            if (pathClear) {
+                localization_phase = MOVE;
+            } else {
+                localization_phase = SPIN;
+            }
+
+            switch (localization_phase) {
+                case SPIN:
+                    ROS_INFO("Rotation robot to cover more area...");
+                    rotate(openDirection * M_PI / 2, 12.0, true);
+                    break;
+                case MOVE:
+                    ROS_INFO("Moving robot to cover more area...");
+                    translate(move_distance, 15.0, true);
+                    break;
+            }
         }
 
         ros::spinOnce();
@@ -980,6 +1002,175 @@ bool alignRobot() {
     return alignClient.call(srv);
 }
 
+constexpr double LOOKAHEAD_DIST = 0.25;
+constexpr double MAX_STEP = 0.02;
+constexpr double OBSTACLE_MARGIN = 0.1;
+constexpr double MAX_SPEED = 5;
+
+struct Pose2D {
+    double x, y, theta;
+};
+
+Eigen::Vector2d cellToWorld(int i, int j) {
+    return {i * CELL_SIZE + CELL_SIZE / 2.0, j * CELL_SIZE + CELL_SIZE / 2.0};
+}
+
+Eigen::Vector2d quadraticBezier(double t, const Eigen::Vector2d& P0,
+                                const Eigen::Vector2d& P1,
+                                const Eigen::Vector2d& P2) {
+    return (1 - t) * (1 - t) * P0 + 2 * (1 - t) * t * P1 + t * t * P2;
+}
+
+std::vector<Eigen::Vector2d> generateBezierPath(const std::vector<std::pair<int, int>>& cells) {
+    std::vector<Eigen::Vector2d> path;
+    if (cells.size() < 2) {
+        Eigen::Vector2d P = cellToWorld(cells[0].first, cells[0].second);
+        path.push_back(P);
+        return path;
+    }
+    for (size_t i = 0; i < cells.size() - 1; ++i) {
+        Eigen::Vector2d P0 = cellToWorld(cells[i].first, cells[i].second);
+        Eigen::Vector2d P2 = cellToWorld(cells[i+1].first, cells[i+1].second);
+        Eigen::Vector2d P1 = 0.5 * (P0 + P2);
+        for (double t = 0; t <= 1.0; t += MAX_STEP) {
+            path.push_back(quadraticBezier(t, P0, P1, P2));
+        }
+    }
+    return path;
+}
+
+
+bool isObstacleNearPoint(const Eigen::Vector2d& point, double threshold = OBSTACLE_MARGIN) {
+    double dx = point.x() - current_pose.x;
+    double dy = point.y() - current_pose.y;
+    double dist_to_point = std::hypot(dx, dy);
+    double angle = std::atan2(dy, dx) - current_pose.theta;
+    while (angle > M_PI) angle -= 2 * M_PI;
+    while (angle < -M_PI) angle += 2 * M_PI;
+    int index = static_cast<int>((angle - local_copy.angle_min) / local_copy.angle_increment);
+    if (index >= 0 && index < static_cast<int>(local_copy.ranges.size())) {
+        if (local_copy.ranges[index] > local_copy.range_min && local_copy.ranges[index] < dist_to_point + threshold) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Pose2D getNextTarget(const std::vector<Eigen::Vector2d>& path) {
+    Pose2D target;
+    double min_error = 1e9;
+    for (size_t i = 0; i < path.size(); ++i) {
+        double dx = path[i].x() - current_pose.x;
+        double dy = path[i].y() - current_pose.y;
+        double dist = std::hypot(dx, dy);
+        double heading = std::atan2(dy, dx);
+        double angle_diff = heading - current_pose.theta;
+        while (angle_diff > M_PI) angle_diff -= 2 * M_PI;
+        while (angle_diff < -M_PI) angle_diff += 2 * M_PI;
+        if (dist > LOOKAHEAD_DIST && std::abs(angle_diff) < M_PI / 2.0) {
+            if (!isObstacleNearPoint(path[i])) {
+                if (dist < min_error) {
+                    min_error = dist;
+                    target.x = path[i].x();
+                    target.y = path[i].y();
+                    target.theta = heading;
+                }
+            }
+        }
+    }
+    if (min_error == 1e9 && !path.empty()) {
+        Eigen::Vector2d p = path.back();
+        double dx = p.x() - current_pose.x;
+        double dy = p.y() - current_pose.y;
+        target.x = p.x();
+        target.y = p.y();
+        target.theta = std::atan2(dy, dx);
+    }
+    return target;
+}
+
+void followTarget(const Pose2D& target_pose) {
+    double dx = target_pose.x - current_pose.x;
+    double dy = target_pose.y - current_pose.y;
+    double rho = std::hypot(dx, dy);
+
+    double alpha = std::atan2(dy, dx) - current_pose.theta;
+    while (alpha > M_PI) alpha -= 2 * M_PI;
+    while (alpha < -M_PI) alpha += 2 * M_PI;
+
+    double linear = 0.0;
+    if (std::abs(alpha) < M_PI / 2.0) {
+        linear = MAX_SPEED * std::exp(-std::pow(rho / 0.8, 2));
+        linear *= std::exp(-std::pow(alpha / M_PI, 2));
+    }
+
+    double angular = 2.0 * alpha;
+
+    double v_left = linear - (TRACK_WIDTH_M / 2.0) * angular;
+    double v_right = linear + (TRACK_WIDTH_M / 2.0) * angular;
+
+    v_left = std::clamp(v_left, -MAX_SPEED, MAX_SPEED);
+    v_right = std::clamp(v_right, -MAX_SPEED, MAX_SPEED);
+
+    create_fundamentals::DiffDrive srv;
+    srv.request.left = v_left;
+    srv.request.right = v_right;
+    diffDriveClient.call(srv);
+}
+
+std::vector<std::pair<int, int>> planToCells(int start_x, int start_y, const std::vector<int>& plan) {
+    std::vector<std::pair<int, int>> cells;
+    int x = start_x;
+    int y = start_y;
+    cells.emplace_back(x, y);
+    for (int dir : plan) {
+        if (dir == 0) y += 1;
+        else if (dir == 2) y -= 1;
+        else if (dir == 1) x -= 1;
+        else if (dir == 3) x += 1;
+        cells.emplace_back(x, y);
+    }
+
+    return cells;
+}
+
+void executePath(std::vector<std::pair<int, int>>& cells, ros::Rate rate) {
+    std::vector<Eigen::Vector2d> path = generateBezierPath(cells);
+    while (ros::ok() && !path.empty()) {
+        Eigen::Vector2d goal = cellToWorld(cells.front().first, cells.front().second);
+        double dx = goal.x() - current_pose.x;
+        double dy = goal.y() - current_pose.y;
+        if (std::hypot(dx, dy) < 0.3) {
+            cells.erase(cells.begin());
+            continue;
+        }
+
+        std::vector<std::pair<int, int>> segment;
+        if (cells.size() >= 2) {
+            segment = {cells[0], cells[1]};
+        } else {
+            segment = {cells[0]};
+        }
+
+        std::vector<Eigen::Vector2d> path = generateBezierPath(segment);
+        Pose2D target = getNextTarget(path);
+        followTarget(target);
+        rate.sleep();
+        ros::spinOnce();
+    }
+
+    create_fundamentals::DiffDrive stop;
+    stop.request.left = 0;
+    stop.request.right = 0;
+    diffDriveClient.call(stop);
+}
+
+bool executePlan(plastic_fundamentals::ExecutePlan::Request &req, plastic_fundamentals::ExecutePlan::Response &res) {
+    std::vector<std::pair<int, int>> cells = planToCells(current_pose.x, current_pose.y, req.plan);
+    executePath(cells, ros::Rate(100));
+}
+
+
 
 int main(int argc, char** argv) {
     ros::init(argc, argv, "mcl_localization");
@@ -1007,9 +1198,12 @@ int main(int argc, char** argv) {
     rotateClient = nh.serviceClient<plastic_fundamentals::Move>("perform_rotation");
     translateClient = nh.serviceClient<plastic_fundamentals::Move>("perform_translation");
 
+    diffDriveClient = nh.serviceClient<create_fundamentals::DiffDrive>("diff_drive");
+
+
     alignClient = nh.serviceClient<plastic_fundamentals::Align>("/align");
 
-    ros::ServiceServer service = nh.advertiseService("execute_plan", executePlan);
+    //ros::ServiceServer service = nh.advertiseService("/execute_plan", executePlan);
 
     ROS_INFO("MCL localization node started");
 
@@ -1018,7 +1212,7 @@ int main(int argc, char** argv) {
         ros::Duration(0.5).sleep();
 	}
 
-    ros::AsyncSpinner spinner(2);
+    ros::AsyncSpinner spinner(4);
     spinner.start();
 
     while (!map_data) {

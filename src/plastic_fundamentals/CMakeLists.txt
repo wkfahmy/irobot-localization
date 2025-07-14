@@ -103,18 +103,10 @@ add_executable(challenge_dry src/challenge_dry.cpp)
 target_link_libraries(challenge_dry graph_utils ${catkin_LIBRARIES})
 add_dependencies(challenge_dry graph_utils create_fundamentals_generate_messages_cpp)
 
-add_executable(move src/move.cpp)
-target_link_libraries(move ${catkin_LIBRARIES})
-add_dependencies(move create_fundamentals_generate_messages_cpp)
-
 add_library(graph_utils src/graph_utils.cpp)
 target_link_libraries(graph_utils ${catkin_LIBRARIES})
 add_dependencies(graph_utils ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
-add_executable(move_to_position src/move_to_position.cpp)
-target_link_libraries(move_to_position graph_utils ${catkin_LIBRARIES})
-add_dependencies(move_to_position graph_utils create_fundamentals_generate_messages_cpp)
-
-#add_executable(enhanced_align_complete src/enhanced_align_complete.cpp)
-#target_link_libraries(enhanced_align_complete graph_utils ${catkin_LIBRARIES})
-#add_dependencies(enhanced_align_complete graph_utils create_fundamentals_generate_messages_cpp)
+add_executable(move src/move.cpp)
+target_link_libraries(move graph_utils ${catkin_LIBRARIES})
+add_dependencies(move graph_utils create_fundamentals_generate_messages_cpp)
