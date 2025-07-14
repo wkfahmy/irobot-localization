@@ -5,6 +5,7 @@
 #include <create_fundamentals/StoreSong.h>
 #include <create_fundamentals/PlaySong.h>
 #include <std_msgs/String.h>
+#include "graph_utils.hpp"
 #include <fstream>
 #include <vector>
 #include <utility>
@@ -248,9 +249,12 @@ public:
     }
 
     double calculateDistance(const std::pair<int, int>& pos1, const std::pair<int, int>& pos2) {
-        int dr = pos1.first - pos2.first;
-        int dc = pos1.second - pos2.second;
-        return std::sqrt(dr * dr + dc * dc);
+        auto graph = createGraph();
+        auto path = findShortestPath(graph, pos1, pos2);
+
+        if (path.empty()) return 100; // Return a large distance if no path found so it is excluded
+
+        return path.size() - 1;
     }
     
     int findNearestGold() {
