@@ -100,8 +100,8 @@ target_link_libraries(simulator ${catkin_LIBRARIES})
 add_dependencies(simulator create_fundamentals_generate_messages_cpp)
 
 add_executable(challenge_dry src/challenge_dry.cpp)
-target_link_libraries(challenge_dry ${catkin_LIBRARIES})
-add_dependencies(challenge_dry create_fundamentals_generate_messages_cpp)
+target_link_libraries(challenge_dry graph_utils ${catkin_LIBRARIES})
+add_dependencies(challenge_dry graph_utils create_fundamentals_generate_messages_cpp)
 
 add_executable(move src/move.cpp)
 target_link_libraries(move ${catkin_LIBRARIES})
